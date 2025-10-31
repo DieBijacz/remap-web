@@ -1,58 +1,19 @@
-export enum GameState {
-  MENU = 'menu',
-  GAME = 'game',
-  SETTINGS = 'settings'
-}
+export const GameState = {
+  MENU: 'menu',
+  GAME: 'game',
+  SETTINGS: 'settings'
+} as const;
+
+export type GameState = typeof GameState[keyof typeof GameState];
 
 export class GameStateManager {
   private currentState: GameState = GameState.MENU;
-  private screens: Map<GameState, HTMLElement>;
+  private listeners: Array<(s: GameState) => void> = [];
 
   constructor() {
-    this.screens = new Map([
-      [GameState.MENU, document.getElementById('menu') as HTMLElement],
-      [GameState.GAME, document.getElementById('game-container') as HTMLElement],
-      [GameState.SETTINGS, document.getElementById('settings') as HTMLElement]
-    ]);
-
-    // Debug: log which screen elements were found
-    console.log('[debug] GameStateManager init, elements:', {
-      menu: this.screens.get(GameState.MENU),
-      game: this.screens.get(GameState.GAME),
-      settings: this.screens.get(GameState.SETTINGS)
-    });
-
-    this.showScreen(this.currentState);
-    this.setupEventListeners();
-  }
-
-  private showScreen(state: GameState) {
-    // Hide all screens
-    this.screens.forEach(screen => {
-      screen.classList.remove('active');
-    });
-
-    // Show the requested screen
-    const screen = this.screens.get(state);
-    if (screen) {
-      screen.classList.add('active');
-    } else {
-      console.warn('[debug] showScreen: no element for state', state);
-    }
-
-    console.log('[debug] showScreen ->', state, 'active=', !!screen);
-
-    this.currentState = state;
-  }
-
-  private setupEventListeners() {
-    const startButton = document.getElementById('start-game');
-    const settingsButton = document.getElementById('open-settings');
-    const backButton = document.getElementById('close-settings');
-
-    startButton?.addEventListener('click', () => this.showScreen(GameState.GAME));
-    settingsButton?.addEventListener('click', () => this.showScreen(GameState.SETTINGS));
-    backButton?.addEventListener('click', () => this.showScreen(GameState.MENU));
+    // start in MENU state
+    this.currentState = GameState.MENU;
+    console.log('[debug] GameStateManager init, state=', this.currentState);
   }
 
   getCurrentState() {
@@ -60,6 +21,18 @@ export class GameStateManager {
   }
 
   showState(state: GameState) {
-    this.showScreen(state);
+    if (this.currentState === state) return;
+    this.currentState = state;
+    this.emit(state);
+    console.log('[debug] GameStateManager showState ->', state);
+  }
+
+  onChange(cb: (s: GameState) => void) {
+    this.listeners.push(cb);
+    return () => { this.listeners = this.listeners.filter(l => l !== cb); };
+  }
+
+  private emit(state: GameState) {
+    for (const cb of this.listeners) cb(state);
   }
 }

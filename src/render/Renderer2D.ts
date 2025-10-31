@@ -11,8 +11,9 @@ export class Renderer2D {
     window.addEventListener('resize', () => this.resize());
   }
 
-  get w() { return this.canvas.width; }
-  get h() { return this.canvas.height; }
+  // Return CSS pixel dimensions (we draw in CSS px after applying DPR transform)
+  get w() { return this.canvas.clientWidth; }
+  get h() { return this.canvas.clientHeight; }
 
   resize() {
     const dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -25,7 +26,7 @@ export class Renderer2D {
     // set responsive CSS variables on the canvas container so DOM symbols can size accordingly
     try {
       const container = this.canvas.parentElement || this.canvas;
-      const base = Math.min(this.canvas.clientWidth, this.canvas.clientHeight);
+  const base = Math.min(this.canvas.clientWidth, this.canvas.clientHeight);
       // symbol size smaller (~10% of smaller dimension), ring slightly larger (~16%)
       const symbolSize = Math.max(20, Math.round(base * 0.10));
       const ringSize = Math.max(28, Math.round(base * 0.16));
@@ -40,7 +41,8 @@ export class Renderer2D {
     const { ctx } = this;
     ctx.save();
     ctx.fillStyle = color;
-    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    // clear using CSS pixel dimensions (coords are in CSS px because of setTransform)
+    ctx.fillRect(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
     ctx.restore();
   }
 }

@@ -1,4 +1,3 @@
-import { PausableTime } from '../core/Clock';
 import { easeOutCubic } from '../core/Animation';
 
 interface Effect {
@@ -10,10 +9,8 @@ interface Effect {
 
 export class EffectsManager {
   private effects: Effect[] = [];
-  private time: PausableTime;
-
-  constructor(time: PausableTime) {
-    this.time = time;
+  constructor() {
+    // no-op; time parameter removed because it's not currently used
   }
 
   addEffect(effect: Effect) {

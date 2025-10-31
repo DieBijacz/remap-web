@@ -108,6 +108,7 @@ canvas#game {
       display: none;
       /* timer drawn on canvas */
     }
+
     #score {
       display: none;
       /* score drawn on canvas */
@@ -169,6 +170,7 @@ canvas#game {
     #time {
       display: none;
     }
+
     #score {
       display: none;
     }
@@ -176,6 +178,9 @@ canvas#game {
 }
 
 /* Ensure buttons inherit the Orbitron font (some browsers use system font for buttons) */
-button, input, select, textarea {
+button,
+input,
+select,
+textarea {
   font-family: inherit;
 }

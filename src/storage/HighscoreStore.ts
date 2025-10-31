@@ -18,4 +18,8 @@ export default class HighscoreStore {
       return [];
     }
   }
+
+  clear() {
+    localStorage.removeItem(HIGHSCORE_KEY);
+  }
 }

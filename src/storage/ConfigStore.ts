@@ -3,6 +3,11 @@ const CONFIG_KEY = 'remap:config';
 export type Config = {
   palette?: string;
   volume?: number;
+  initialTime?: number;
+  maxTimeBonus?: number;
+  bonusWindow?: number;
+  ringRadiusFactor?: number;
+  minTimeBonus?: number;
 };
 
 export default class ConfigStore {

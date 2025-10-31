@@ -16,70 +16,98 @@ export const createSymbol = (x: number, y: number, type: SymbolType): Symbol => 
   rotation: 0
 });
 
+const NEON_COLORS: Record<SymbolType, { glow: string; inner: string; ambient: string }> = {
+  square: { glow: '#ffd95a', inner: '#fff9e6', ambient: 'rgba(255, 217, 90, 0.35)' },
+  circle: { glow: '#ff63c0', inner: '#ffe6f8', ambient: 'rgba(255, 99, 192, 0.32)' },
+  triangle: { glow: '#4fe49b', inner: '#edfff6', ambient: 'rgba(79, 228, 155, 0.30)' },
+  cross: { glow: '#59b8ff', inner: '#ecf6ff', ambient: 'rgba(89, 184, 255, 0.28)' }
+};
+
+const tracePath = (ctx: CanvasRenderingContext2D, type: SymbolType, size: number, shrink = 0) => {
+  const effective = size - shrink * 2;
+  switch (type) {
+    case 'square': {
+      const half = effective / 2;
+      ctx.rect(-half, -half, effective, effective);
+      break;
+    }
+    case 'circle': {
+      ctx.arc(0, 0, effective / 2, 0, Math.PI * 2);
+      break;
+    }
+    case 'triangle': {
+      const half = effective / 2;
+      const topY = -effective * 0.62;
+      const baseY = effective * 0.34;
+      ctx.moveTo(-half, baseY);
+      ctx.lineTo(0, topY);
+      ctx.lineTo(half, baseY);
+      ctx.closePath();
+      break;
+    }
+    case 'cross': {
+      const arm = effective / 2;
+      ctx.moveTo(-arm, -arm);
+      ctx.lineTo(arm, arm);
+      ctx.moveTo(arm, -arm);
+      ctx.lineTo(-arm, arm);
+      break;
+    }
+  }
+};
+
 export const drawSymbol = (
   ctx: CanvasRenderingContext2D,
   symbol: Symbol,
   isTarget: boolean = false
 ) => {
   const { x, y, scale, rotation, type } = symbol;
-  const size = 40 * scale;
+  const palette = NEON_COLORS[type];
+  const size = 46 * scale;
+  const glowLine = size * (type === 'cross' ? 0.20 : 0.18);
+  const innerLine = size * (type === 'cross' ? 0.12 : 0.095);
+  const baseGlow = isTarget ? 52 : 34;
 
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(rotation);
-  // neon color and shadow per type
-  let color = '#ffffff';
-  let shadow = 'rgba(255,255,255,0.6)';
-  switch (type) {
-    case 'square':
-      color = '#FFE135';
-      shadow = 'rgba(255,225,53,0.9)';
-      break;
-    case 'circle':
-      color = '#FF3366';
-      shadow = 'rgba(255,51,102,0.9)';
-      break;
-    case 'triangle':
-      color = '#2ea043';
-      shadow = 'rgba(46,160,67,0.9)';
-      break;
-    case 'cross':
-      color = '#00A6ED';
-      shadow = 'rgba(0,166,237,0.9)';
-      break;
-  }
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
 
+  // Outer glow stroke
   ctx.beginPath();
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = color;
-  ctx.shadowColor = shadow;
-  ctx.shadowBlur = isTarget ? 24 : 12;
+  tracePath(ctx, type, size);
+  ctx.lineWidth = glowLine;
+  ctx.strokeStyle = palette.glow;
+  ctx.shadowColor = palette.glow;
+  ctx.shadowBlur = baseGlow;
+  ctx.globalAlpha = 0.92;
+  ctx.stroke();
 
-  switch (type) {
-    case 'square':
-      ctx.rect(-size / 2, -size / 2, size, size);
-      break;
-    case 'circle':
-      ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
-      break;
-    case 'triangle':
-      ctx.moveTo(-size / 2, size / 3);
-      ctx.lineTo(0, -size / 2);
-      ctx.lineTo(size / 2, size / 3);
-      ctx.closePath();
-      break;
-    case 'cross':
-      // draw two crossing lines
-      ctx.moveTo(-size / 2, -size / 2);
-      ctx.lineTo(size / 2, size / 2);
-      ctx.moveTo(size / 2, -size / 2);
-      ctx.lineTo(-size / 2, size / 2);
-      break;
+  // Ambient fill for solid shapes
+  if (type !== 'cross') {
+    const gradient = ctx.createRadialGradient(0, 0, size * 0.05, 0, 0, size * 0.6);
+    gradient.addColorStop(0, 'rgba(255,255,255,0.55)');
+    gradient.addColorStop(0.45, palette.ambient);
+    gradient.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.beginPath();
+    tracePath(ctx, type, size, size * 0.02);
+    ctx.fillStyle = gradient;
+    ctx.globalAlpha = 0.55;
+    ctx.shadowBlur = isTarget ? 26 : 18;
+    ctx.shadowColor = palette.glow;
+    ctx.fill();
   }
 
+  // Inner bright stroke
+  ctx.beginPath();
+  tracePath(ctx, type, size, size * 0.015);
+  ctx.lineWidth = innerLine;
+  ctx.strokeStyle = palette.inner;
+  ctx.shadowColor = 'rgba(255,255,255,0.65)';
+  ctx.shadowBlur = isTarget ? 22 : 14;
+  ctx.globalAlpha = 1;
   ctx.stroke();
-  // reset shadow
-  ctx.shadowBlur = 0;
-  ctx.shadowColor = 'transparent';
+
   ctx.restore();
 };
