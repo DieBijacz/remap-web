@@ -1,0 +1,10 @@
+@use './vars' as *;
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: $bg;
+  color: $ink;
+  font-family: system-ui, sans-serif;
+}

@@ -1,0 +1,181 @@
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Orbitron', Arial, sans-serif;
+  background: #0d1117;
+  color: #fff;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+}
+
+.screen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: none;
+
+  z-index: 0;
+
+  &.active {
+    display: flex;
+    z-index: 10;
+    /* active screen above other content */
+  }
+}
+
+#game-container {
+  justify-content: center;
+  align-items: center;
+  background: #0d1117;
+  position: relative;
+  /* ensure absolutely positioned overlays inside are positioned against this container */
+}
+
+/* ensure canvas sits below active screens (menu) unless game screen is active */
+canvas#game {
+  z-index: 1;
+}
+
+#menu {
+  z-index: 20;
+}
+
+#menu {
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 1rem;
+
+  h1 {
+    font-size: 3rem;
+    margin-bottom: 2rem;
+  }
+
+  button {
+    padding: 1rem 2rem;
+    font-size: 1.2rem;
+    background: #238636;
+    border: none;
+    border-radius: 6px;
+    color: white;
+    cursor: pointer;
+
+    &:hover {
+      background: #2ea043;
+    }
+  }
+}
+
+/* Make the game container a fixed, centered 9:16 portrait box (always). */
+#game-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  /* Allow the portrait box to scale and fill the viewport vertically */
+  max-height: 100vh;
+  aspect-ratio: 9 / 16;
+  max-width: 100vw;
+  margin: 0 auto;
+
+  canvas#game {
+    background: #0d1117;
+    width: 100%;
+    height: 100%;
+    display: block;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.4);
+  }
+
+  .hud {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    right: 1rem;
+    display: flex;
+    justify-content: space-between;
+    font-size: 1.5rem;
+    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.5);
+    z-index: 2;
+
+    #time {
+      display: none;
+      /* timer drawn on canvas */
+    }
+    #score {
+      display: none;
+      /* score drawn on canvas */
+    }
+  }
+}
+
+#settings {
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 1rem;
+
+  button {
+    padding: 0.5rem 1rem;
+    font-size: 1rem;
+    background: #238636;
+    border: none;
+    border-radius: 6px;
+    color: white;
+    cursor: pointer;
+    min-width: 200px;
+  }
+}
+
+/* For active game container: force a fixed vertical 9:16 aspect ratio suitable for portrait TV
+   The canvas will fill the viewport height and its width will follow a 9:16 ratio. It will be centered horizontally. */
+#game-container.active {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  canvas#game {
+    background: #0d1117;
+    height: 100vh;
+    /* fill the vertical space */
+    aspect-ratio: 9 / 16;
+    /* force 9:16 portrait ratio */
+    width: auto;
+    /* computed from height and aspect-ratio */
+    max-width: 100vw;
+    /* don't overflow horizontally */
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.4);
+    display: block;
+    margin: 0 auto;
+  }
+
+  .hud {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    right: 1rem;
+    display: flex;
+    justify-content: space-between;
+    font-size: 1.5rem;
+    z-index: 1;
+    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.5);
+
+    #time {
+      display: none;
+    }
+    #score {
+      display: none;
+    }
+  }
+}
+
+/* Ensure buttons inherit the Orbitron font (some browsers use system font for buttons) */
+button, input, select, textarea {
+  font-family: inherit;
+}

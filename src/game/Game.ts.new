@@ -1,0 +1,171 @@
+import { Clock, PausableTime } from '../core/Clock';
+import { Renderer2D } from '../render/Renderer2D';
+import { AnimationTimeline } from '../core/Animation';
+import { Timer } from '../core/Timer';
+import { Symbol, drawSymbol } from '../render/Symbols';
+import type { Direction } from '../render/Symbols';
+import type { InputHandler } from '../input/InputManager';
+import { InputManager } from '../input/InputManager';
+
+interface GameConfig {
+  duration: number;      // Game duration in seconds
+  timeGain: number;      // Time gained on correct answer
+  timePenalty: number;   // Time lost on wrong answer
+  symbolCount: number;   // Number of symbols to display
+}
+
+export class Game implements InputHandler {
+  private clock = new Clock();
+  private time = new PausableTime();
+  private renderer: Renderer2D;
+  private anim = new AnimationTimeline();
+  private input: InputManager;
+  private score = 0;
+  private config: GameConfig = {
+    duration: 45,
+    timeGain: 3,
+    timePenalty: 2,
+    symbolCount: 4
+  };
+  
+  private timer: Timer;
+  private symbols: Symbol[] = [];
+  private currentTargetIndex = 0;
+  private isGameOver = false;
+
+  constructor(canvas: HTMLCanvasElement) {
+    this.renderer = new Renderer2D(canvas);
+    this.timer = new Timer(this.config.duration, this.time);
+    this.input = new InputManager();
+    
+    // Register for input events
+    this.input.addHandler(this);
+  }
+
+  onKeyDown(e: KeyboardEvent) {
+    if (this.isGameOver) return;
+      
+    let input: Direction | null = null;
+    switch (e.key) {
+      case 'ArrowUp': input = 'up'; break;
+      case 'ArrowRight': input = 'right'; break;
+      case 'ArrowDown': input = 'down'; break;
+      case 'ArrowLeft': input = 'left'; break;
+    }
+    
+    if (input !== null) {
+      this.handleInput(input);
+    }
+  }
+
+  private handleInput(input: Direction) {
+    const target = this.symbols[this.currentTargetIndex];
+    
+    if (input === target.direction) {
+      // Correct answer
+      this.score += 100;
+      this.timer.add(this.config.timeGain);
+      
+      // Update target and maybe shuffle symbols
+      this.currentTargetIndex = Math.floor(Math.random() * this.symbols.length);
+      if (this.score % 500 === 0) {  // Every 5 correct answers
+        this.initSymbols();  // Reshuffle all symbols
+      }
+    } else {
+      // Wrong answer
+      this.timer.add(-this.config.timePenalty);
+    }
+    
+    // Update HUD
+    document.getElementById('score')!.textContent = `Score: ${this.score}`;
+  }
+
+  private initSymbols() {
+    const directions: Direction[] = ['up', 'right', 'down', 'left'];
+    const { w, h } = this.renderer;
+    const radius = Math.min(w, h) * 0.3;
+    const center = { x: w/2, y: h/2 };
+    
+    this.symbols = [];
+    
+    // Create symbols in a circle
+    for (let i = 0; i < this.config.symbolCount; i++) {
+      const angle = (i / this.config.symbolCount) * Math.PI * 2;
+      const x = center.x + Math.cos(angle) * radius;
+      const y = center.y + Math.sin(angle) * radius;
+      const direction = directions[Math.floor(Math.random() * directions.length)];
+      const symbol: Symbol = {
+        direction,
+        x,
+        y,
+        scale: 1,
+        rotation: angle // Face outward from center
+      };
+      this.symbols.push(symbol);
+    }
+    
+    this.currentTargetIndex = Math.floor(Math.random() * this.symbols.length);
+  }
+
+  start() {
+    this.isGameOver = false;
+    this.score = 0;
+    this.timer.set(this.config.duration);
+    this.initSymbols();
+    this.time.start();
+    this.clock.start((dt) => this.update(dt));
+  }
+
+  private update(dt: number) {
+    if (this.isGameOver) return;
+
+    // Update global time and timer
+    this.time.tick(dt);
+    this.timer.tick(dt);
+    
+    // Update time display
+    const timeLeft = Math.ceil(this.timer.get());
+    document.getElementById('time')!.textContent = `Time: ${timeLeft}s`;
+    
+    // Check for game over
+    if (timeLeft <= 0) {
+      this.isGameOver = true;
+      this.input.removeHandler(this);
+      alert(`Game Over! Final score: ${this.score}`);
+      return;
+    }
+    
+    // Update animations
+    this.anim.tick(dt);
+    
+    // Draw frame
+    this.draw();
+  }
+
+  private draw() {
+    const r = this.renderer;
+    r.clear('#0d1117');
+    
+    // Draw symbols
+    this.symbols.forEach((symbol, i) => {
+      drawSymbol(r.ctx, symbol, i === this.currentTargetIndex);
+    });
+    
+    // Draw time bar
+    const pad = 24;
+    const barH = 8;
+    const barW = r.w - pad * 2;
+    const timeRatio = Math.max(0, Math.min(1, this.timer.get() / this.config.duration));
+    
+    r.ctx.fillStyle = '#1f2632';
+    r.ctx.fillRect(pad, r.h - pad - barH, barW, barH);
+    r.ctx.fillStyle = '#78c6ff';
+    r.ctx.fillRect(pad, r.h - pad - barH, barW * timeRatio, barH);
+  }
+
+  // API methods
+  addTime(seconds: number) { this.timer.add(seconds); }
+  setTime(seconds: number) { this.timer.set(seconds); }
+  pauseLayer() { this.time.pauseLayer(); }
+  resumeLayer() { this.time.resumeLayer(); }
+}
