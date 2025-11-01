@@ -8,6 +8,8 @@ export type Config = {
   bonusWindow?: number;
   ringRadiusFactor?: number;
   minTimeBonus?: number;
+  mechanicInterval?: number;
+  mechanicRandomize?: boolean;
 };
 
 export default class ConfigStore {

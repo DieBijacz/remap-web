@@ -64,8 +64,8 @@ export const drawSymbol = (
   const { x, y, scale, rotation, type } = symbol;
   const palette = NEON_COLORS[type];
   const size = 46 * scale;
-  const glowLine = size * (type === 'cross' ? 0.20 : 0.18);
-  const innerLine = size * (type === 'cross' ? 0.12 : 0.095);
+  const glowLine = size * (type === 'cross' ? 0.10 : 0.09);
+  const innerLine = size * (type === 'cross' ? 0.06 : 0.048);
   const baseGlow = isTarget ? 52 : 34;
 
   ctx.save();

@@ -26,7 +26,7 @@ export class Renderer2D {
     // set responsive CSS variables on the canvas container so DOM symbols can size accordingly
     try {
       const container = this.canvas.parentElement || this.canvas;
-  const base = Math.min(this.canvas.clientWidth, this.canvas.clientHeight);
+      const base = Math.min(this.canvas.clientWidth, this.canvas.clientHeight);
       // symbol size smaller (~10% of smaller dimension), ring slightly larger (~16%)
       const symbolSize = Math.max(20, Math.round(base * 0.10));
       const ringSize = Math.max(28, Math.round(base * 0.16));

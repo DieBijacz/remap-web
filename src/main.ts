@@ -21,7 +21,9 @@ let settingsValues: PersistentConfig = {
   maxTimeBonus: persistedConfig.maxTimeBonus ?? 3,
   bonusWindow: persistedConfig.bonusWindow ?? 2.5,
   ringRadiusFactor: persistedConfig.ringRadiusFactor ?? 0.18,
-  minTimeBonus: persistedConfig.minTimeBonus ?? 0.5
+  minTimeBonus: persistedConfig.minTimeBonus ?? 0.5,
+  mechanicInterval: persistedConfig.mechanicInterval ?? 10,
+  mechanicRandomize: persistedConfig.mechanicRandomize ?? false
 };
 configStore.save(settingsValues);
 
@@ -37,6 +39,12 @@ type SettingItem =
       max: number;
       step: number;
       format: (value: number) => string;
+    }
+  | {
+      type: 'toggle';
+      key: keyof PersistentConfig;
+      label: string;
+      format?: (value: boolean) => string;
     }
   | {
       type: 'action';
@@ -72,6 +80,21 @@ const SETTINGS_ITEMS: SettingItem[] = [
     max: 0.26,
     step: 0.01,
     format: (v) => `${Math.round(v * 100)}% width`
+  },
+  {
+    type: 'number',
+    key: 'mechanicInterval',
+    label: 'Mechanic Interval',
+    min: 3,
+    max: 30,
+    step: 1,
+    format: (v) => `${Math.round(v)} hits`
+  },
+  {
+    type: 'toggle',
+    key: 'mechanicRandomize',
+    label: 'Randomize Mechanics',
+    format: (value) => (value ? 'On' : 'Off')
   },
   {
     type: 'action',
@@ -163,19 +186,19 @@ function drawSettings() {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  const titleSize = Math.max(24, Math.round(cssH * 0.06));
+  const titleSize = Math.max(20, Math.round(cssH * 0.05));
   ctx.font = `${titleSize}px Orbitron, sans-serif`;
   ctx.fillStyle = '#fff';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText('Settings', cssW / 2, cssH * 0.12);
 
-  const listStartY = Math.round(cssH * 0.28);
-  const rowSpacing = Math.max(36, Math.round(cssH * 0.085));
-  const rowHeight = Math.max(32, Math.round(cssH * 0.07));
+  const listStartY = Math.round(cssH * 0.26);
+  const rowSpacing = Math.max(26, Math.round(cssH * 0.06));
+  const rowHeight = Math.max(22, Math.round(cssH * 0.05));
   const marginX = Math.round(cssW * 0.12);
-  const labelSize = Math.max(14, Math.round(cssH * 0.032));
-  const valueSize = Math.max(16, Math.round(cssH * 0.045));
+  const labelSize = Math.max(11, Math.round(cssH * 0.024));
+  const valueSize = Math.max(13, Math.round(cssH * 0.032));
 
   SETTINGS_ITEMS.forEach((item, idx) => {
     const y = listStartY + idx * rowSpacing;
@@ -199,6 +222,14 @@ function drawSettings() {
       ctx.font = `${valueSize}px Orbitron, sans-serif`;
       ctx.fillStyle = isSelected ? '#79c0ff' : '#cbd5f5';
       ctx.fillText(item.format(raw as number), cssW - marginX, displayY);
+    } else if (item.type === 'toggle') {
+      const raw = settingsValues[item.key];
+      const enabled = typeof raw === 'boolean' ? raw : Boolean(raw);
+      const text = item.format ? item.format(enabled) : enabled ? 'On' : 'Off';
+      ctx.textAlign = 'right';
+      ctx.font = `${valueSize}px Orbitron, sans-serif`;
+      ctx.fillStyle = isSelected ? '#7ee787' : '#cbd5f5';
+      ctx.fillText(text, cssW - marginX, displayY);
     } else {
       ctx.textAlign = 'right';
       ctx.font = `${labelSize}px Orbitron, sans-serif`;
@@ -220,12 +251,12 @@ function drawSettings() {
   const btnX = Math.round((cssW - btnW) / 2);
   const btnY = Math.round(cssH * 0.82);
 
-  ctx.font = `${Math.max(14, Math.round(cssH * 0.035))}px Orbitron, sans-serif`;
+  ctx.font = `${Math.max(12, Math.round(cssH * 0.028))}px Orbitron, sans-serif`;
   drawButton(btnX, btnY, btnW, btnH, 'Back');
   backButtonRect = new DOMRect(btnX, btnY, btnW, btnH);
 
   ctx.textAlign = 'center';
-  ctx.font = `${Math.max(12, Math.round(cssH * 0.028))}px Orbitron, sans-serif`;
+  ctx.font = `${Math.max(10, Math.round(cssH * 0.022))}px Orbitron, sans-serif`;
   ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
   ctx.fillText('Use UP/DOWN to select, LEFT/RIGHT to adjust, Enter to confirm, Esc to exit', cssW / 2, btnY - Math.max(24, Math.round(cssH * 0.06)));
   ctx.restore();
@@ -276,6 +307,14 @@ function adjustNumberSetting(option: Extract<SettingItem, { type: 'number' }>, d
   drawSettings();
 }
 
+function toggleBooleanSetting(option: Extract<SettingItem, { type: 'toggle' }>) {
+  const currentRaw = settingsValues[option.key];
+  const next = !(typeof currentRaw === 'boolean' ? currentRaw : Boolean(currentRaw));
+  persistSettings({ [option.key]: next } as PersistentConfig);
+  settingsMessage = null;
+  drawSettings();
+}
+
 function clampNumber(value: number, min: number, max: number, decimals: number) {
   const clamped = Math.max(min, Math.min(max, value));
   const factor = Math.pow(10, decimals);
@@ -299,11 +338,17 @@ function handleSettingsKey(e: KeyboardEvent) {
       if (option.type === 'number') {
         adjustNumberSetting(option, -1);
         e.preventDefault();
+      } else if (option.type === 'toggle') {
+        toggleBooleanSetting(option);
+        e.preventDefault();
       }
       break;
     case 'ArrowRight':
       if (option.type === 'number') {
         adjustNumberSetting(option, +1);
+        e.preventDefault();
+      } else if (option.type === 'toggle') {
+        toggleBooleanSetting(option);
         e.preventDefault();
       }
       break;
@@ -311,6 +356,9 @@ function handleSettingsKey(e: KeyboardEvent) {
       if (option.type === 'action') {
         option.onActivate();
         drawSettings();
+        e.preventDefault();
+      } else if (option.type === 'toggle') {
+        toggleBooleanSetting(option);
         e.preventDefault();
       }
       break;

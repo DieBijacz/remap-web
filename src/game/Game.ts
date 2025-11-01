@@ -20,6 +20,35 @@ const CENTER_MIN_SCALE = CENTER_BASE_SCALE * 0.4;
 const TIME_DELTA_DISPLAY_SEC = 1.1;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const TAU = Math.PI * 2;
+const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const easeInOutCubicDerivative = (t: number) => (t < 0.5 ? 12 * t * t : 12 * Math.pow(1 - t, 2));
+type Direction = 'up' | 'right' | 'down' | 'left';
+type MechanicType = 'none' | 'remap' | 'spin' | 'memory' | 'joystick';
+const MECHANIC_SEQUENCE: MechanicType[] = ['none', 'remap', 'spin', 'memory', 'joystick'];
+const MECHANIC_INTERVAL = 10;
+const MEMORY_PREVIEW_DURATION = 1.0;
+const RING_BASE_ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
+const MECHANIC_COLORS: Record<MechanicType, string> = {
+  none: '#9da7b3',
+  remap: '#ec4899',
+  spin: '#fbbf24',
+  memory: '#f87171',
+  joystick: '#34d399'
+};
+
+interface SpinState {
+  active: boolean;
+  elapsed: number;
+  duration: number;
+  swapAt: number;
+  swapDone: boolean;
+  targetTypes: SymbolType[];
+  startRotation: number;
+  targetRotation: number;
+  spins: number;
+  velocity: number;
+}
 
 interface GameConfig {
   duration: number;        // Game duration in seconds
@@ -74,6 +103,19 @@ export class Game implements InputHandler {
   private promptSpawnTime = 0;
   private isGameOver = false;
   private configStore: ConfigStore | null = null;
+  private correctAnswers = 0;
+  private currentMechanicBlock = 0;
+  private mechanicInterval = MECHANIC_INTERVAL;
+  private mechanicRandomize = false;
+  private activeMechanic: MechanicType = 'none';
+  private mechanicBannerText: string | null = null;
+  private remapMapping: { from: SymbolType; to: SymbolType } | null = null;
+  private memoryRevealTimer = 0;
+  private memorySymbolsHidden = false;
+  private joystickInverted = false;
+  private ringRotationOffset = 0;
+  private spinState: SpinState | null = null;
+  private lastRandomMechanic: MechanicType = 'none';
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new Renderer2D(canvas);
@@ -112,8 +154,293 @@ export class Game implements InputHandler {
     if (candidates.length === 0) {
       return this.centerSymbol;
     }
-    const idx = Math.floor(Math.random() * candidates.length);
-    return candidates[idx] ?? this.centerSymbol;
+    return this.randomChoice(candidates, this.centerSymbol);
+  }
+
+  private randomChoice<T>(items: T[], fallback: T): T {
+    if (items.length === 0) {
+      return fallback;
+    }
+    const idx = Math.floor(Math.random() * items.length);
+    return items[idx] ?? fallback;
+  }
+
+  private shuffleArray<T>(source: T[]): T[] {
+    const copy = [...source];
+    for (let i = copy.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  }
+
+  private rollRandomMechanic(exclude?: MechanicType): MechanicType {
+    const pool: MechanicType[] = ['remap', 'spin', 'memory', 'joystick'];
+    const filtered = pool.filter((mechanic) => mechanic !== exclude);
+    const candidates = filtered.length > 0 ? filtered : pool;
+    return this.randomChoice<MechanicType>(candidates, candidates[0] ?? 'remap');
+  }
+
+  private applyDefaultRingOrder() {
+    if (this.symbols.length === 0) return;
+    this.ringRotationOffset = 0;
+    RING_SYMBOL_TYPES.forEach((type, index) => {
+      const symbol = this.symbols[index];
+      if (symbol) {
+        symbol.type = type;
+        symbol.rotation = 0;
+      }
+    });
+    this.updateRingLayout();
+  }
+
+  private applySpinShuffle(opts?: { animate?: boolean }) {
+    if (this.symbols.length === 0) return;
+    const currentTypes = this.symbols.map((symbol) => symbol.type);
+    const shuffledTypes = this.shuffleArray(currentTypes);
+    const animate = opts?.animate !== false;
+    if (animate) {
+      this.startSpinAnimation(shuffledTypes);
+      return;
+    }
+    this.cancelSpinAnimation(0);
+    this.symbols.forEach((symbol, index) => {
+      symbol.type = shuffledTypes[index] ?? symbol.type;
+      symbol.rotation = 0;
+    });
+    this.updateRingLayout();
+  }
+
+  private startSpinAnimation(targetTypes: SymbolType[]) {
+    if (this.symbols.length === 0) return;
+    const duration = 0.9;
+    const spins = 2.0;
+    const startRotation = this.ringRotationOffset % TAU;
+    const targetRotation = startRotation + TAU * spins;
+    const state: SpinState = {
+      active: true,
+      elapsed: 0,
+      duration,
+      swapAt: 0.5,
+      swapDone: false,
+      targetTypes,
+      startRotation,
+      targetRotation,
+      spins,
+      velocity: 0
+    };
+    this.spinState = state;
+  }
+
+  private cancelSpinAnimation(finalRotation?: number) {
+    const final = typeof finalRotation === 'number' ? finalRotation : this.ringRotationOffset;
+    this.ringRotationOffset = ((final % TAU) + TAU) % TAU;
+    this.spinState = null;
+    this.updateRingLayout();
+  }
+
+  private updateSpinAnimation(dt: number) {
+    if (!this.spinState || !this.spinState.active) return;
+    const state = this.spinState;
+    state.elapsed = Math.min(state.duration, state.elapsed + dt);
+    const progress = clamp(state.elapsed / state.duration, 0, 1);
+    const eased = easeInOutCubic(progress);
+    const rotation = state.startRotation + (state.targetRotation - state.startRotation) * eased;
+    this.ringRotationOffset = rotation;
+    this.updateRingLayout();
+
+    const derivative = easeInOutCubicDerivative(progress);
+    const angularVelocity = (state.targetRotation - state.startRotation) * derivative / state.duration;
+    state.velocity = angularVelocity;
+
+    if (!state.swapDone && progress >= state.swapAt) {
+      this.symbols.forEach((symbol, index) => {
+        symbol.type = state.targetTypes[index] ?? symbol.type;
+      });
+      state.swapDone = true;
+    }
+
+    if (progress >= 1) {
+      this.cancelSpinAnimation(rotation);
+    }
+  }
+
+  private rollRemapMapping() {
+    const availableSet = this.symbols.length > 0 ? this.symbols.map((s) => s.type) : [...RING_SYMBOL_TYPES];
+    const uniqueAvailable = Array.from(new Set(availableSet));
+    if (uniqueAvailable.length < 2) {
+      this.remapMapping = null;
+      this.mechanicBannerText = 'Remap Pause';
+      return;
+    }
+
+    const excludeCurrent = this.remapMapping?.from;
+    const sourcePool = uniqueAvailable.filter((sym) => sym !== excludeCurrent);
+    const from = this.randomChoice(sourcePool.length > 0 ? sourcePool : uniqueAvailable, uniqueAvailable[0]);
+
+    const targetPool = uniqueAvailable.filter((sym) => sym !== from);
+    const fallbackTarget = targetPool[0] ?? uniqueAvailable[0];
+    let to = this.randomChoice(targetPool.length > 0 ? targetPool : uniqueAvailable.filter((sym) => sym !== from), fallbackTarget);
+    if (to === from) {
+      const alternative = uniqueAvailable.find((sym) => sym !== from);
+      if (alternative) {
+        to = alternative;
+      }
+    }
+
+    this.remapMapping = { from, to };
+    this.mechanicBannerText = null;
+  }
+
+  private getExpectedSymbolType(): SymbolType {
+    if (this.activeMechanic === 'remap' && this.remapMapping) {
+      if (this.centerSymbol === this.remapMapping.from) {
+        return this.remapMapping.to;
+      }
+    }
+    return this.centerSymbol;
+  }
+
+  private mapInputDirection(dir: Direction): Direction {
+    if (!this.joystickInverted) {
+      return dir;
+    }
+    switch (dir) {
+      case 'left': return 'right';
+      case 'right': return 'left';
+      case 'up': return 'down';
+      case 'down': return 'up';
+      default: return dir;
+    }
+  }
+
+  private ensureMemoryMessage() {
+    if (this.activeMechanic !== 'memory') {
+      return;
+    }
+    const expected = this.memorySymbolsHidden ? 'Memory Recall' : 'Memory Prep';
+    if (this.mechanicBannerText !== expected) {
+      this.mechanicBannerText = expected;
+    }
+  }
+
+  private enterMechanic(next: MechanicType) {
+    if (next !== 'remap') {
+      this.remapMapping = null;
+    }
+    if (next !== 'joystick') {
+      this.joystickInverted = false;
+    }
+    if (next !== 'memory') {
+      this.memorySymbolsHidden = false;
+      this.memoryRevealTimer = 0;
+    }
+    if (next !== 'spin') {
+      this.cancelSpinAnimation(0);
+    }
+
+    this.activeMechanic = next;
+
+    switch (next) {
+      case 'none':
+        this.mechanicBannerText = null;
+        this.applyDefaultRingOrder();
+        break;
+      case 'remap':
+        this.mechanicBannerText = null;
+        this.applyDefaultRingOrder();
+        this.rollRemapMapping();
+        break;
+      case 'spin':
+        this.mechanicBannerText = 'Spin Mode';
+        this.applySpinShuffle();
+        break;
+      case 'memory':
+        this.memorySymbolsHidden = false;
+        this.memoryRevealTimer = MEMORY_PREVIEW_DURATION;
+        this.applySpinShuffle();
+        this.mechanicBannerText = 'Memory Prep';
+        this.ensureMemoryMessage();
+        break;
+      case 'joystick':
+        this.joystickInverted = true;
+        this.applyDefaultRingOrder();
+        this.mechanicBannerText = 'Joystick Flip';
+        break;
+      default:
+        this.mechanicBannerText = null;
+        break;
+    }
+  }
+
+  private refreshMechanic(mechanic: MechanicType) {
+    switch (mechanic) {
+      case 'remap':
+        this.rollRemapMapping();
+        break;
+      case 'spin':
+        this.mechanicBannerText = 'Spin Mode';
+        this.applySpinShuffle();
+        break;
+      case 'memory':
+        if (!this.memorySymbolsHidden) {
+          this.mechanicBannerText = 'Memory Prep';
+        }
+        if (this.memorySymbolsHidden) {
+          this.ensureMemoryMessage();
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  private updateMechanicsAfterCorrect() {
+    if (this.mechanicInterval <= 0) {
+      return;
+    }
+    const newBlock = Math.floor(this.correctAnswers / this.mechanicInterval);
+    let nextMechanic = this.activeMechanic;
+
+    if (newBlock !== this.currentMechanicBlock) {
+      if (newBlock <= 0) {
+        nextMechanic = 'none';
+      } else if (this.mechanicRandomize) {
+        nextMechanic = this.rollRandomMechanic(this.lastRandomMechanic);
+      } else {
+        nextMechanic = MECHANIC_SEQUENCE[newBlock % MECHANIC_SEQUENCE.length];
+      }
+    }
+
+    if (nextMechanic !== 'none') {
+      this.lastRandomMechanic = nextMechanic;
+    }
+
+    if (newBlock !== this.currentMechanicBlock || nextMechanic !== this.activeMechanic) {
+      this.currentMechanicBlock = newBlock;
+      this.enterMechanic(nextMechanic);
+    } else {
+      this.refreshMechanic(this.activeMechanic);
+    }
+  }
+
+  private reapplyActiveMechanicLayout() {
+    switch (this.activeMechanic) {
+      case 'none':
+        this.applyDefaultRingOrder();
+        break;
+      case 'spin':
+        this.applySpinShuffle();
+        break;
+      case 'memory':
+        this.applySpinShuffle();
+        this.memorySymbolsHidden = false;
+        this.memoryRevealTimer = MEMORY_PREVIEW_DURATION;
+        this.ensureMemoryMessage();
+        break;
+      default:
+        break;
+    }
   }
 
   private applyCenterSymbol(next: SymbolType, opts?: { resetVisual?: boolean }) {
@@ -176,28 +503,50 @@ export class Game implements InputHandler {
     if (this.symbols.length > 0) {
       this.updateRingLayout();
     }
+
+    const rawInterval = typeof data.mechanicInterval === 'number' ? data.mechanicInterval : this.mechanicInterval;
+    const clampedInterval = Math.max(1, Math.round(clamp(rawInterval, 1, 60)));
+    const randomize = Boolean(data.mechanicRandomize ?? false);
+    const intervalChanged = clampedInterval !== this.mechanicInterval;
+    const randomChanged = randomize !== this.mechanicRandomize;
+
+    this.mechanicInterval = clampedInterval;
+    this.mechanicRandomize = randomize;
+
+    if (intervalChanged || randomChanged) {
+      if (randomChanged && !this.mechanicRandomize) {
+        this.lastRandomMechanic = 'none';
+      }
+      this.updateMechanicsAfterCorrect();
+    }
   }
 
-  private computeRingLayout() {
+  private getRingRadius() {
+    return Math.round(this.renderer.w * this.config.ringRadiusFactor);
+  }
+
+  private computeRingPositions(offset = this.ringRotationOffset) {
     const { w, h } = this.renderer;
-    const radius = Math.round(w * this.config.ringRadiusFactor);
+    const radius = this.getRingRadius();
     const center = { x: w / 2, y: h / 2 };
-    return [
-      { type: 'triangle' as SymbolType, x: center.x, y: center.y - radius },
-      { type: 'square' as SymbolType, x: center.x - radius, y: center.y },
-      { type: 'circle' as SymbolType, x: center.x + radius, y: center.y },
-      { type: 'cross' as SymbolType, x: center.x, y: center.y + radius }
-    ];
+    return RING_BASE_ANGLES.map((base) => {
+      const angle = base + offset;
+      return {
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle)
+      };
+    });
   }
 
   private updateRingLayout() {
-    const layout = this.computeRingLayout();
-    layout.forEach((pos, index) => {
+    const positions = this.computeRingPositions();
+    positions.forEach((pos, index) => {
       const symbol = this.symbols[index];
       if (symbol) {
         symbol.x = pos.x;
         symbol.y = pos.y;
         symbol.scale = RING_SYMBOL_SCALE;
+        symbol.rotation = this.ringRotationOffset;
       }
     });
   }
@@ -289,7 +638,6 @@ export class Game implements InputHandler {
     }
 
     // Map arrow keys to directions
-    type Direction = 'up' | 'right' | 'down' | 'left';
     let inputDir: Direction | null = null;
     switch (e.key) {
       case 'ArrowUp': inputDir = 'up'; break;
@@ -303,87 +651,101 @@ export class Game implements InputHandler {
     }
   }
 
-  private handleInput(inputDir: 'up' | 'right' | 'down' | 'left') {
-    console.log('[debug] handleInput', { inputDir, symbolCount: this.symbols.length });
+  private handleInput(inputDir: Direction) {
+    console.log('[debug] handleInput', { inputDir, symbolCount: this.symbols.length, mechanic: this.activeMechanic });
 
-    // Map direction to symbol index (we created symbols in order: top, left, right, bottom)
-    const dirToIndex: Record<string, number> = {
+    const dirToIndex: Record<Direction, number> = {
       up: 0,
       left: 1,
       right: 2,
       down: 3
     };
 
-    const idx = (dirToIndex as any)[inputDir];
+    const effectiveDir = this.mapInputDirection(inputDir);
+    const idx = dirToIndex[effectiveDir];
     const ringSymbol = this.symbols[idx];
     if (!ringSymbol) {
-      console.warn('[debug] handleInput - no ring symbol for direction', inputDir);
+      console.warn('[debug] handleInput - no ring symbol for direction', effectiveDir);
       return;
     }
 
-    console.log('[debug] centerSymbol', this.centerSymbol, 'ringSymbol', ringSymbol.type);
+    const expectedType = this.getExpectedSymbolType();
+    console.log('[debug] centerSymbol', this.centerSymbol, 'expectedType', expectedType, 'ringSymbol', ringSymbol.type, 'remap', this.remapMapping);
 
-    if (ringSymbol.type === this.centerSymbol) {
+    if (ringSymbol.type === expectedType) {
       // Correct answer
-      this.score += 100;
-      const bonus = this.computeTimeBonus();
-      if (bonus !== 0) {
-        this.timer.add(bonus);
-        this.showTimeDelta(bonus);
-      }
-      this.streak += 1;
-      if (this.score > this.highscore) {
-        this.highscore = this.score;
-      }
-
-      // Visual and sound feedback
-      this.effects.flash('#2ea043', 0.2);
-      this.effects.symbolPulse({ current: ringSymbol.scale });
-      this.audio.play('correct');
-
-      const next = this.getRandomSymbolType(this.centerSymbol);
-      this.anim.clear();
-      this.animateCenterSwap(next, {
-        targetPos: { x: ringSymbol.x, y: ringSymbol.y },
-        exitDuration: 0.24,
-        appearDuration: 0.34,
-        offsetRatio: 0.085
-      });
-
-      // Occasionally reshuffle the ring
-      if (this.score % 500 === 0) {
-        this.initSymbols();
-      }
+      this.handleCorrectSelection(ringSymbol);
     } else {
-      // Wrong answer
-      this.timer.add(-this.config.timePenalty);
-      this.showTimeDelta(-this.config.timePenalty);
-      this.effects.flash('#ff4433', 0.2);
-      this.audio.play('wrong');
-      this.streak = 0;
-      const next = this.getRandomSymbolType(this.centerSymbol, ringSymbol.type);
-      this.anim.clear();
-      this.animateCenterSwap(next, {
-        exitDuration: 0.22,
-        appearDuration: 0.34,
-        offsetRatio: 0.06,
-        disappearScale: CENTER_BASE_SCALE * 0.5
-      });
+      this.handleWrongSelection(ringSymbol);
     }
 
     // Update HUD (score will be drawn on the canvas in draw())
   }
 
+  private handleCorrectSelection(ringSymbol: Symbol) {
+    this.score += 100;
+    const bonus = this.computeTimeBonus();
+    if (bonus !== 0) {
+      this.timer.add(bonus);
+      this.showTimeDelta(bonus);
+    }
+    this.streak += 1;
+    if (this.score > this.highscore) {
+      this.highscore = this.score;
+    }
+
+    // Visual and sound feedback
+    this.effects.flash('#2ea043', 0.2);
+    this.effects.symbolPulse({ current: ringSymbol.scale });
+    this.audio.play('correct');
+
+    this.correctAnswers += 1;
+    this.updateMechanicsAfterCorrect();
+
+    const next = this.getRandomSymbolType(this.centerSymbol);
+    this.anim.clear();
+    this.animateCenterSwap(next, {
+      targetPos: { x: ringSymbol.x, y: ringSymbol.y },
+      exitDuration: 0.24,
+      appearDuration: 0.34,
+      offsetRatio: 0.085
+    });
+
+    if (this.score % 500 === 0) {
+      this.initSymbols();
+    }
+  }
+
+  private handleWrongSelection(ringSymbol: Symbol) {
+    this.timer.add(-this.config.timePenalty);
+    this.showTimeDelta(-this.config.timePenalty);
+    this.effects.flash('#ff4433', 0.2);
+    this.audio.play('wrong');
+    this.streak = 0;
+    const next = this.getRandomSymbolType(this.centerSymbol, ringSymbol.type);
+    this.anim.clear();
+    this.animateCenterSwap(next, {
+      exitDuration: 0.22,
+      appearDuration: 0.34,
+      offsetRatio: 0.06,
+      disappearScale: CENTER_BASE_SCALE * 0.5
+    });
+  }
+
   private initSymbols() {
-    const layout = this.computeRingLayout();
-    this.symbols = layout.map((pos) => ({
-      type: pos.type,
+    const positions = this.computeRingPositions(0);
+    const baseTypes = RING_SYMBOL_TYPES.slice(0, positions.length);
+    this.symbols = positions.map((pos, index) => ({
+      type: baseTypes[index % baseTypes.length],
       x: pos.x,
       y: pos.y,
       scale: RING_SYMBOL_SCALE,
       rotation: 0
     }));
 
+    this.ringRotationOffset = 0;
+    this.spinState = null;
+    this.reapplyActiveMechanicLayout();
     this.applyCenterSymbol(this.getRandomSymbolType());
     this.centerScale = CENTER_BASE_SCALE;
     this.centerOpacity = 1;
@@ -400,6 +762,17 @@ export class Game implements InputHandler {
     this.streak = 0;
     this.timeDeltaValue = 0;
     this.timeDeltaTimer = 0;
+    this.correctAnswers = 0;
+    this.currentMechanicBlock = 0;
+    this.activeMechanic = 'none';
+    this.mechanicBannerText = null;
+    this.remapMapping = null;
+    this.memoryRevealTimer = 0;
+    this.memorySymbolsHidden = false;
+    this.joystickInverted = false;
+    this.ringRotationOffset = 0;
+    this.spinState = null;
+    this.lastRandomMechanic = 'none';
     this.syncHighscore();
     this.timer.set(this.config.duration);
     this.initSymbols();
@@ -422,6 +795,21 @@ export class Game implements InputHandler {
         this.timeDeltaTimer = 0;
       }
     }
+
+    if (this.activeMechanic === 'memory' && !this.memorySymbolsHidden) {
+      if (this.memoryRevealTimer > 0) {
+        this.memoryRevealTimer = Math.max(0, this.memoryRevealTimer - dt);
+        if (this.memoryRevealTimer <= 0) {
+          this.memorySymbolsHidden = true;
+          this.ensureMemoryMessage();
+        }
+      } else {
+        this.memorySymbolsHidden = true;
+        this.ensureMemoryMessage();
+      }
+    }
+
+    this.updateSpinAnimation(dt);
 
     // get current remaining time as float (used for game over check)
     const timeLeftFloat = this.timer.get();
@@ -447,11 +835,27 @@ export class Game implements InputHandler {
     const r = this.renderer;
     r.clear('#0d1117');
 
+    const hideRing = this.activeMechanic === 'memory' && this.memorySymbolsHidden;
+    const spinState = this.spinState && this.spinState.active ? this.spinState : null;
+    const velocity = spinState ? Math.abs(spinState.velocity) : 0;
+    const blurAmount = spinState ? clamp(velocity * 0.1, 0, 5.5) : 0;
+    const applyBlur = !hideRing && blurAmount > 0.15;
+
     // Draw symbols
+    if (applyBlur) {
+      r.ctx.save();
+      r.ctx.filter = `blur(${blurAmount.toFixed(2)}px)`;
+    }
     this.symbols.forEach((symbol) => {
+      if (hideRing) {
+        return;
+      }
       // ring answers are not the current prompt; draw with normal glow
       drawSymbol(r.ctx, symbol, false);
     });
+    if (applyBlur) {
+      r.ctx.restore();
+    }
 
     // Draw center prompt symbol larger in the middle (may be animating)
     const centerX = this.centerPos.x || r.w / 2;
@@ -502,6 +906,76 @@ export class Game implements InputHandler {
     r.ctx.fillStyle = '#79c0ff';
     r.ctx.fillText(`${this.highscore}`, r.w - hudPad, topY + labelFontSize + labelOffset);
     r.ctx.restore();
+
+    const showRemapMapping = this.activeMechanic === 'remap' && this.remapMapping;
+    const bannerText = !showRemapMapping && this.mechanicBannerText ? this.mechanicBannerText.trim() : '';
+    if (showRemapMapping || bannerText) {
+      const center = this.getCanvasCenter();
+      const radius = this.getRingRadius();
+      const rowScale = clamp(r.h * 0.0013, 0.52, 0.78);
+      const symbolSize = 46 * rowScale;
+      const spacing = Math.max(symbolSize * 0.32, 18);
+      const arrowWidth = Math.max(symbolSize * 1.35, 54);
+      const arrowThickness = Math.max(symbolSize * 0.26, 9);
+      const arrowHead = arrowWidth * 0.24;
+      const arrowHeadHeight = arrowThickness * 1.35;
+      const totalWidth = symbolSize * 2 + arrowWidth + spacing * 2;
+      const startX = (r.w - totalWidth) / 2;
+      const scoreBlockHeight = Math.max(scoreFontSize, labelFontSize + labelOffset + valueFontSize);
+      const scoreboardBottom = topY + scoreBlockHeight;
+      const ringTop = center.y - radius;
+      let mapY = scoreboardBottom + Math.max(16, (ringTop - scoreboardBottom) * 0.45);
+      mapY = Math.min(mapY, ringTop - Math.max(symbolSize * 0.6, 28));
+      mapY = Math.max(mapY, scoreboardBottom + symbolSize * 0.6);
+
+      if (showRemapMapping && this.remapMapping) {
+        let cursor = startX;
+        const leftX = cursor + symbolSize / 2;
+        cursor += symbolSize + spacing;
+        const arrowX = cursor + arrowWidth / 2;
+        cursor += arrowWidth + spacing;
+        const rightX = cursor + symbolSize / 2;
+
+        const leftSymbol: Symbol = { type: this.remapMapping.from, x: leftX, y: mapY, scale: rowScale, rotation: 0 };
+        const rightSymbol: Symbol = { type: this.remapMapping.to, x: rightX, y: mapY, scale: rowScale, rotation: 0 };
+        drawSymbol(r.ctx, leftSymbol, true);
+        drawSymbol(r.ctx, rightSymbol, true);
+
+        r.ctx.save();
+        r.ctx.translate(arrowX, mapY);
+        r.ctx.beginPath();
+        const halfThickness = arrowThickness / 2;
+        const bodyLength = arrowWidth - arrowHead;
+        const bodyStart = -arrowWidth / 2;
+        const bodyEnd = bodyStart + bodyLength;
+        r.ctx.moveTo(bodyStart, -halfThickness);
+        r.ctx.lineTo(bodyEnd, -halfThickness);
+        r.ctx.lineTo(bodyEnd, -arrowHeadHeight);
+        r.ctx.lineTo(arrowWidth / 2, 0);
+        r.ctx.lineTo(bodyEnd, arrowHeadHeight);
+        r.ctx.lineTo(bodyEnd, halfThickness);
+        r.ctx.lineTo(bodyStart, halfThickness);
+        r.ctx.closePath();
+        const arrowColor = MECHANIC_COLORS.remap;
+        r.ctx.fillStyle = arrowColor;
+        r.ctx.globalAlpha = 0.92;
+        r.ctx.shadowColor = arrowColor;
+        r.ctx.shadowBlur = 14;
+        r.ctx.fill();
+        r.ctx.restore();
+      } else if (bannerText) {
+        r.ctx.save();
+        r.ctx.font = `${Math.max(18, Math.round(r.h * 0.05))}px Orbitron, sans-serif`;
+        r.ctx.textAlign = 'center';
+        r.ctx.textBaseline = 'middle';
+        const color = MECHANIC_COLORS[this.activeMechanic] ?? MECHANIC_COLORS.none;
+        r.ctx.fillStyle = color;
+        r.ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+        r.ctx.shadowBlur = 10;
+        r.ctx.fillText(bannerText, r.w / 2, mapY);
+        r.ctx.restore();
+      }
+    }
 
     // Draw time bar
 
