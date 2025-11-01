@@ -20,7 +20,7 @@ export class EffectsManager {
     });
   }
 
-  flash(color: string, duration = 0.2) {
+  flash(color: string, duration = 0.2, maxOpacity = 0.3) {
     let overlay: HTMLDivElement | null = document.createElement('div');
     overlay.style.position = 'fixed';
     overlay.style.top = '0';
@@ -30,7 +30,7 @@ export class EffectsManager {
     overlay.style.backgroundColor = color;
     overlay.style.pointerEvents = 'none';
     overlay.style.transition = `opacity ${duration}s ease-out`;
-    overlay.style.opacity = '0.3';
+    overlay.style.opacity = String(maxOpacity);
 
     document.body.appendChild(overlay);
 
@@ -42,7 +42,7 @@ export class EffectsManager {
       elapsed: 0,
       onUpdate: (t) => {
         if (overlay) {
-          overlay.style.opacity = String(0.3 * (1 - easeOutCubic(t)));
+          overlay.style.opacity = String(maxOpacity * (1 - easeOutCubic(t)));
         }
       },
       onComplete: () => {

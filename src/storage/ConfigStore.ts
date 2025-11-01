@@ -10,6 +10,9 @@ export type Config = {
   minTimeBonus?: number;
   mechanicInterval?: number;
   mechanicRandomize?: boolean;
+  symbolScale?: number;
+  symbolStroke?: number;
+  uiFontScale?: number;
 };
 
 export default class ConfigStore {

@@ -59,14 +59,16 @@ const tracePath = (ctx: CanvasRenderingContext2D, type: SymbolType, size: number
 export const drawSymbol = (
   ctx: CanvasRenderingContext2D,
   symbol: Symbol,
-  isTarget: boolean = false
+  isTarget: boolean = false,
+  strokeScale: number = 1
 ) => {
   const { x, y, scale, rotation, type } = symbol;
   const palette = NEON_COLORS[type];
   const size = 46 * scale;
-  const glowLine = size * (type === 'cross' ? 0.10 : 0.09);
-  const innerLine = size * (type === 'cross' ? 0.06 : 0.048);
-  const baseGlow = isTarget ? 52 : 34;
+  const glowLine = size * (type === 'cross' ? 0.10 : 0.09) * strokeScale;
+  const innerLine = size * (type === 'cross' ? 0.06 : 0.048) * strokeScale;
+  const glowBoost = Math.max(0.6, Math.min(1.6, strokeScale));
+  const baseGlow = (isTarget ? 52 : 34) * glowBoost;
 
   ctx.save();
   ctx.translate(x, y);

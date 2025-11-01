@@ -23,7 +23,10 @@ let settingsValues: PersistentConfig = {
   ringRadiusFactor: persistedConfig.ringRadiusFactor ?? 0.18,
   minTimeBonus: persistedConfig.minTimeBonus ?? 0.5,
   mechanicInterval: persistedConfig.mechanicInterval ?? 10,
-  mechanicRandomize: persistedConfig.mechanicRandomize ?? false
+  mechanicRandomize: persistedConfig.mechanicRandomize ?? false,
+  symbolScale: persistedConfig.symbolScale ?? 1,
+  symbolStroke: persistedConfig.symbolStroke ?? 1,
+  uiFontScale: persistedConfig.uiFontScale ?? 0.9
 };
 configStore.save(settingsValues);
 
@@ -41,6 +44,10 @@ type SettingItem =
       format: (value: number) => string;
     }
   | {
+      type: 'label';
+      label: string;
+    }
+  | {
       type: 'toggle';
       key: keyof PersistentConfig;
       label: string;
@@ -54,6 +61,7 @@ type SettingItem =
     };
 
 const SETTINGS_ITEMS: SettingItem[] = [
+  { type: 'label', label: 'Gameplay' },
   {
     type: 'number',
     key: 'initialTime',
@@ -83,6 +91,25 @@ const SETTINGS_ITEMS: SettingItem[] = [
   },
   {
     type: 'number',
+    key: 'symbolScale',
+    label: 'Symbol Size',
+    min: 0.6,
+    max: 1.6,
+    step: 0.05,
+    format: (v) => `${Math.round(v * 100)}%`
+  },
+  {
+    type: 'number',
+    key: 'symbolStroke',
+    label: 'Symbol Outline',
+    min: 0.5,
+    max: 1.8,
+    step: 0.05,
+    format: (v) => `×${v.toFixed(2)}`
+  },
+  { type: 'label', label: 'Mechanics' },
+  {
+    type: 'number',
     key: 'mechanicInterval',
     label: 'Mechanic Interval',
     min: 3,
@@ -96,6 +123,16 @@ const SETTINGS_ITEMS: SettingItem[] = [
     label: 'Randomize Mechanics',
     format: (value) => (value ? 'On' : 'Off')
   },
+  { type: 'label', label: 'System' },
+  {
+    type: 'number',
+    key: 'uiFontScale',
+    label: 'UI Font Scale',
+    min: 0.5,
+    max: 1.4,
+    step: 0.05,
+    format: (v) => `${Math.round(v * 100)}%`
+  },
   {
     type: 'action',
     label: 'Reset Highscore',
@@ -107,7 +144,14 @@ const SETTINGS_ITEMS: SettingItem[] = [
   }
 ];
 
-let settingsSelection = 0;
+const getFirstSelectableIndex = (): number => {
+  const idx = SETTINGS_ITEMS.findIndex((item) => item.type !== 'label');
+  return idx === -1 ? 0 : idx;
+};
+
+const hasSelectableSettings = SETTINGS_ITEMS.some((item) => item.type !== 'label');
+
+let settingsSelection = getFirstSelectableIndex();
 let settingsMessage: string | null = null;
 
 // Menu UI button rectangles (in CSS pixels)
@@ -185,35 +229,57 @@ function drawSettings() {
   const cssH = canvas.clientHeight;
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  const titleSize = Math.max(20, Math.round(cssH * 0.05));
+ 
+  const fontScale = clampNumber(settingsValues.uiFontScale ?? 1, 0.5, 1.4, 2);
+  const titleSize = Math.max(16, Math.round(cssH * 0.045 * Math.max(0.75, fontScale)));
   ctx.font = `${titleSize}px Orbitron, sans-serif`;
   ctx.fillStyle = '#fff';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText('Settings', cssW / 2, cssH * 0.12);
 
-  const listStartY = Math.round(cssH * 0.26);
-  const rowSpacing = Math.max(26, Math.round(cssH * 0.06));
-  const rowHeight = Math.max(22, Math.round(cssH * 0.05));
+  const listStartY = Math.round(cssH * 0.24);
+  const baseSpacing = Math.max(24, Math.round(cssH * 0.052));
+  const rowSpacing = Math.max(22, Math.round(baseSpacing * Math.max(0.82, fontScale)));
+  const rowHeight = Math.max(18, Math.round(cssH * 0.042 * Math.max(0.85, fontScale)));
   const marginX = Math.round(cssW * 0.12);
-  const labelSize = Math.max(11, Math.round(cssH * 0.024));
-  const valueSize = Math.max(13, Math.round(cssH * 0.032));
+  const labelSize = Math.max(9, Math.round(cssH * 0.021 * fontScale));
+  const valueSize = Math.max(11, Math.round(cssH * 0.028 * fontScale));
+  const headingSize = Math.max(10, Math.round(labelSize * 0.78));
 
   SETTINGS_ITEMS.forEach((item, idx) => {
     const y = listStartY + idx * rowSpacing;
     const isSelected = idx === settingsSelection;
+    const selectable = item.type !== 'label';
     const displayY = y + rowHeight / 2;
 
-    if (isSelected) {
+    if (isSelected && selectable) {
       ctx.fillStyle = 'rgba(79, 70, 229, 0.18)';
       roundRect(ctx, marginX * 0.6, y - rowHeight * 0.2, cssW - marginX * 1.2, rowHeight, Math.min(12, rowHeight * 0.35), true, false);
     }
 
     ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+
+    if (item.type === 'label') {
+      ctx.save();
+      ctx.font = `${headingSize}px Orbitron, sans-serif`;
+      ctx.fillStyle = 'rgba(133, 189, 255, 0.8)';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(item.label.toUpperCase(), marginX, displayY + headingSize * 0.22);
+      const underlineY = displayY + headingSize * 0.45;
+      ctx.strokeStyle = 'rgba(66, 88, 140, 0.45)';
+      ctx.lineWidth = Math.max(1, headingSize * 0.08);
+      ctx.beginPath();
+      ctx.moveTo(marginX, underlineY);
+      ctx.lineTo(cssW - marginX * 0.8, underlineY);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+
     ctx.font = `${labelSize}px Orbitron, sans-serif`;
     ctx.fillStyle = isSelected ? '#cdd7ff' : '#9aa5be';
-    ctx.textAlign = 'left';
     ctx.fillText(item.label, marginX, displayY);
 
     if (item.type === 'number') {
@@ -240,7 +306,7 @@ function drawSettings() {
 
   if (settingsMessage) {
     ctx.textAlign = 'center';
-    ctx.font = `${Math.max(14, Math.round(cssH * 0.03))}px Orbitron, sans-serif`;
+    ctx.font = `${Math.max(12, Math.round(cssH * 0.028 * fontScale))}px Orbitron, sans-serif`;
     ctx.fillStyle = '#7ee787';
     ctx.fillText(settingsMessage, cssW / 2, cssH * 0.72);
   }
@@ -251,15 +317,27 @@ function drawSettings() {
   const btnX = Math.round((cssW - btnW) / 2);
   const btnY = Math.round(cssH * 0.82);
 
-  ctx.font = `${Math.max(12, Math.round(cssH * 0.028))}px Orbitron, sans-serif`;
+  ctx.font = `${Math.max(11, Math.round(cssH * 0.025 * fontScale))}px Orbitron, sans-serif`;
   drawButton(btnX, btnY, btnW, btnH, 'Back');
   backButtonRect = new DOMRect(btnX, btnY, btnW, btnH);
 
   ctx.textAlign = 'center';
-  ctx.font = `${Math.max(10, Math.round(cssH * 0.022))}px Orbitron, sans-serif`;
+  ctx.font = `${Math.max(9, Math.round(cssH * 0.02 * fontScale))}px Orbitron, sans-serif`;
   ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
   ctx.fillText('Use UP/DOWN to select, LEFT/RIGHT to adjust, Enter to confirm, Esc to exit', cssW / 2, btnY - Math.max(24, Math.round(cssH * 0.06)));
   ctx.restore();
+}
+
+function moveSelection(delta: number) {
+  if (!hasSelectableSettings) {
+    return;
+  }
+  let next = settingsSelection;
+  do {
+    next = (next + delta + SETTINGS_ITEMS.length) % SETTINGS_ITEMS.length;
+  } while (SETTINGS_ITEMS[next].type === 'label');
+  settingsSelection = next;
+  drawSettings();
 }
 
 // Handle canvas clicks and map to menu/buttons
@@ -325,39 +403,37 @@ function handleSettingsKey(e: KeyboardEvent) {
   const option = SETTINGS_ITEMS[settingsSelection];
   switch (e.key) {
     case 'ArrowDown':
-      settingsSelection = (settingsSelection + 1) % SETTINGS_ITEMS.length;
-      drawSettings();
+      moveSelection(1);
       e.preventDefault();
       break;
     case 'ArrowUp':
-      settingsSelection = (settingsSelection - 1 + SETTINGS_ITEMS.length) % SETTINGS_ITEMS.length;
-      drawSettings();
+      moveSelection(-1);
       e.preventDefault();
       break;
     case 'ArrowLeft':
-      if (option.type === 'number') {
+      if (option?.type === 'number') {
         adjustNumberSetting(option, -1);
         e.preventDefault();
-      } else if (option.type === 'toggle') {
+      } else if (option?.type === 'toggle') {
         toggleBooleanSetting(option);
         e.preventDefault();
       }
       break;
     case 'ArrowRight':
-      if (option.type === 'number') {
+      if (option?.type === 'number') {
         adjustNumberSetting(option, +1);
         e.preventDefault();
-      } else if (option.type === 'toggle') {
+      } else if (option?.type === 'toggle') {
         toggleBooleanSetting(option);
         e.preventDefault();
       }
       break;
     case 'Enter':
-      if (option.type === 'action') {
+      if (option?.type === 'action') {
         option.onActivate();
         drawSettings();
         e.preventDefault();
-      } else if (option.type === 'toggle') {
+      } else if (option?.type === 'toggle') {
         toggleBooleanSetting(option);
         e.preventDefault();
       }
@@ -378,7 +454,7 @@ stateManager.onChange((s) => {
     drawMenu();
   }
   if (s === GameState.SETTINGS) {
-    settingsSelection = 0;
+    settingsSelection = getFirstSelectableIndex();
     drawSettings();
   }
   if (s === GameState.GAME) {

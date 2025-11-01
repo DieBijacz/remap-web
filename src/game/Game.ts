@@ -14,9 +14,9 @@ import ConfigStore from '../storage/ConfigStore';
 import type { Config as PersistentConfig } from '../storage/ConfigStore';
 
 const RING_SYMBOL_TYPES: SymbolType[] = ['triangle', 'square', 'circle', 'cross'];
-const RING_SYMBOL_SCALE = 1.22;
-const CENTER_BASE_SCALE = 1.85;
-const CENTER_MIN_SCALE = CENTER_BASE_SCALE * 0.4;
+const BASE_RING_SYMBOL_SCALE = 1.22;
+const BASE_CENTER_SCALE = 1.85;
+const CENTER_MIN_RATIO = 0.4;
 const TIME_DELTA_DISPLAY_SEC = 1.1;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -35,6 +35,99 @@ const MECHANIC_COLORS: Record<MechanicType, string> = {
   spin: '#fbbf24',
   memory: '#f87171',
   joystick: '#34d399'
+};
+
+type RingSegment = { start: number; end: number; };
+interface RingStyle {
+  radiusScale: number;
+  thickness: number;
+  segments: RingSegment[];
+  rotationScale?: number;
+  rotationOffset?: number;
+  color?: string;
+  glow?: number;
+  opacity?: number;
+}
+
+const hexToRgb = (hex: string) => {
+  const normalized = hex.replace('#', '');
+  const value = normalized.length === 3
+    ? normalized.split('').map((ch) => ch + ch).join('')
+    : normalized.padStart(6, '0');
+  const numeric = parseInt(value, 16);
+  return {
+    r: (numeric >> 16) & 255,
+    g: (numeric >> 8) & 255,
+    b: numeric & 255
+  };
+};
+
+const colorWithAlpha = (hex: string, alpha: number, brighten = 0) => {
+  const { r, g, b } = hexToRgb(hex);
+  const mix = Math.max(0, Math.min(1, brighten));
+  const rr = Math.round(r + (255 - r) * mix);
+  const gg = Math.round(g + (255 - g) * mix);
+  const bb = Math.round(b + (255 - b) * mix);
+  return `rgba(${rr}, ${gg}, ${bb}, ${alpha})`;
+};
+
+const makeSegments = (...ranges: Array<[number, number]>) =>
+  ranges.map(([start, end]) => ({ start, end }));
+
+const MECHANIC_RING_STYLES: Record<MechanicType, RingStyle[]> = {
+  none: [],
+  remap: [
+    {
+      radiusScale: 1.02,
+      thickness: 4.6,
+      glow: 18,
+      segments: makeSegments([0.02, 0.26], [0.52, 0.76])
+    }
+  ],
+  spin: [
+    {
+      radiusScale: 1.12,
+      thickness: 3.8,
+      glow: 14,
+      segments: makeSegments(
+        [0.0, 0.08],
+        [0.17, 0.25],
+        [0.34, 0.42],
+        [0.51, 0.59],
+        [0.68, 0.76],
+        [0.85, 0.93]
+      )
+    }
+  ],
+  memory: [
+    {
+      radiusScale: 0.94,
+      thickness: 3.5,
+      glow: 16,
+      segments: makeSegments([0.08, 0.86])
+    }
+  ],
+  joystick: [
+    {
+      radiusScale: 1.18,
+      thickness: 3.2,
+      glow: 12,
+      segments: makeSegments(
+        [0.11, 0.2],
+        [0.38, 0.47],
+        [0.64, 0.73],
+        [0.91, 1.0]
+      )
+    }
+  ]
+};
+
+const MECHANIC_RING_SPEED: Record<MechanicType, number> = {
+  none: 0,
+  remap: 0.4,
+  spin: 1.45,
+  memory: 0.32,
+  joystick: 0.6
 };
 
 interface SpinState {
@@ -58,6 +151,8 @@ interface GameConfig {
   minTimeBonus: number;    // Minimum extra time rewarded
   bonusWindow: number;     // Seconds window for full bonus
   ringRadiusFactor: number;// Relative radius of outer ring
+  symbolScale: number;
+  symbolStroke: number;
 }
 
 export class Game implements InputHandler {
@@ -79,7 +174,9 @@ export class Game implements InputHandler {
     maxTimeBonus: 3,
     minTimeBonus: 0.5,
     bonusWindow: 2.5,
-    ringRadiusFactor: 0.18
+    ringRadiusFactor: 0.18,
+    symbolScale: 1,
+    symbolStroke: 1
   };
   private timeDeltaValue = 0;
   private timeDeltaTimer = 0;
@@ -90,7 +187,9 @@ export class Game implements InputHandler {
     maxTimeBonus: 3,
     minTimeBonus: 0.5,
     bonusWindow: 2.5,
-    ringRadiusFactor: 0.18
+    ringRadiusFactor: 0.18,
+    symbolScale: 1,
+    symbolStroke: 1
   };
 
   private timer: Timer;
@@ -98,7 +197,11 @@ export class Game implements InputHandler {
   private currentTargetIndex = 0;
   private centerSymbol: SymbolType = 'triangle';
   private centerPos = { x: 0, y: 0 };
-  private centerScale = CENTER_BASE_SCALE;
+  private ringSymbolScale = BASE_RING_SYMBOL_SCALE;
+  private centerBaseScale = BASE_CENTER_SCALE;
+  private centerMinScale = BASE_CENTER_SCALE * CENTER_MIN_RATIO;
+  private centerScale = BASE_CENTER_SCALE;
+  private symbolStrokeScale = 1;
   private centerOpacity = 1;
   private promptSpawnTime = 0;
   private isGameOver = false;
@@ -116,6 +219,13 @@ export class Game implements InputHandler {
   private ringRotationOffset = 0;
   private spinState: SpinState | null = null;
   private lastRandomMechanic: MechanicType = 'none';
+  private mechanicRingAngles: Record<MechanicType, number> = {
+    none: 0,
+    remap: 0,
+    spin: 0,
+    memory: 0,
+    joystick: 0
+  };
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new Renderer2D(canvas);
@@ -184,13 +294,14 @@ export class Game implements InputHandler {
   private applyDefaultRingOrder() {
     if (this.symbols.length === 0) return;
     this.ringRotationOffset = 0;
-    RING_SYMBOL_TYPES.forEach((type, index) => {
-      const symbol = this.symbols[index];
-      if (symbol) {
-        symbol.type = type;
-        symbol.rotation = 0;
-      }
-    });
+      RING_SYMBOL_TYPES.forEach((type, index) => {
+        const symbol = this.symbols[index];
+        if (symbol) {
+          symbol.type = type;
+          symbol.scale = this.ringSymbolScale;
+          symbol.rotation = 0;
+        }
+      });
     this.updateRingLayout();
   }
 
@@ -204,10 +315,11 @@ export class Game implements InputHandler {
       return;
     }
     this.cancelSpinAnimation(0);
-    this.symbols.forEach((symbol, index) => {
-      symbol.type = shuffledTypes[index] ?? symbol.type;
-      symbol.rotation = 0;
-    });
+      this.symbols.forEach((symbol, index) => {
+        symbol.type = shuffledTypes[index] ?? symbol.type;
+        symbol.scale = this.ringSymbolScale;
+        symbol.rotation = 0;
+      });
     this.updateRingLayout();
   }
 
@@ -263,6 +375,22 @@ export class Game implements InputHandler {
     if (progress >= 1) {
       this.cancelSpinAnimation(rotation);
     }
+  }
+
+  private getActiveMechanics(): MechanicType[] {
+    if (this.activeMechanic === 'none') {
+      return [];
+    }
+    return [this.activeMechanic];
+  }
+
+  private updateMechanicRings(dt: number) {
+    const active = this.getActiveMechanics();
+    active.forEach((type) => {
+      const speed = MECHANIC_RING_SPEED[type] ?? 0;
+      if (speed === 0) return;
+      this.mechanicRingAngles[type] = ((this.mechanicRingAngles[type] ?? 0) + speed * dt) % TAU;
+    });
   }
 
   private rollRemapMapping() {
@@ -324,6 +452,12 @@ export class Game implements InputHandler {
     }
   }
 
+  private triggerMechanicFlash(type: MechanicType) {
+    if (type === 'none') return;
+    const color = MECHANIC_COLORS[type] ?? MECHANIC_COLORS.none;
+    this.effects.flash(colorWithAlpha(color, 1), 0.24, 0.22);
+  }
+
   private enterMechanic(next: MechanicType) {
     if (next !== 'remap') {
       this.remapMapping = null;
@@ -370,6 +504,10 @@ export class Game implements InputHandler {
       default:
         this.mechanicBannerText = null;
         break;
+    }
+
+    if (next !== 'none') {
+      this.triggerMechanicFlash(next);
     }
   }
 
@@ -451,7 +589,7 @@ export class Game implements InputHandler {
     this.centerPos.x = cx;
     this.centerPos.y = cy;
     if (opts?.resetVisual !== false) {
-      this.centerScale = CENTER_BASE_SCALE;
+      this.centerScale = this.centerBaseScale;
       this.centerOpacity = 1;
     }
   }
@@ -493,14 +631,26 @@ export class Game implements InputHandler {
       maxTimeBonus: clamp(data.maxTimeBonus ?? this.defaults.maxTimeBonus, 0.5, 6),
       minTimeBonus: clamp(data.minTimeBonus ?? this.defaults.minTimeBonus, 0.1, 5),
       bonusWindow: clamp(data.bonusWindow ?? this.defaults.bonusWindow, 0.5, 6),
-      ringRadiusFactor: clamp(data.ringRadiusFactor ?? this.defaults.ringRadiusFactor, 0.08, 0.3)
+      ringRadiusFactor: clamp(data.ringRadiusFactor ?? this.defaults.ringRadiusFactor, 0.08, 0.3),
+      symbolScale: clamp(data.symbolScale ?? this.defaults.symbolScale, 0.6, 1.6),
+      symbolStroke: clamp(data.symbolStroke ?? this.defaults.symbolStroke, 0.5, 1.8)
     };
     // Ensure floor is not above ceiling
     if (merged.minTimeBonus > merged.maxTimeBonus) {
       merged.minTimeBonus = merged.maxTimeBonus;
     }
     this.config = merged;
+
+    this.ringSymbolScale = BASE_RING_SYMBOL_SCALE * merged.symbolScale;
+    this.centerBaseScale = BASE_CENTER_SCALE * merged.symbolScale;
+    this.centerMinScale = this.centerBaseScale * CENTER_MIN_RATIO;
+    this.centerScale = this.centerBaseScale;
+    this.symbolStrokeScale = merged.symbolStroke;
+
     if (this.symbols.length > 0) {
+      this.symbols.forEach((symbol) => {
+        symbol.scale = this.ringSymbolScale;
+      });
       this.updateRingLayout();
     }
 
@@ -545,9 +695,74 @@ export class Game implements InputHandler {
       if (symbol) {
         symbol.x = pos.x;
         symbol.y = pos.y;
-        symbol.scale = RING_SYMBOL_SCALE;
+        symbol.scale = this.ringSymbolScale;
         symbol.rotation = this.ringRotationOffset;
       }
+    });
+  }
+
+  private drawRingBackdrop(ctx: CanvasRenderingContext2D) {
+    const { x: cx, y: cy } = this.getCanvasCenter();
+    const radius = this.getRingRadius();
+    const pulseTime = this.time.get();
+    const pulse = 0.35 + 0.25 * (Math.sin(pulseTime * 1.6) * 0.5 + 0.5);
+    const baseColor = MECHANIC_COLORS[this.activeMechanic] ?? MECHANIC_COLORS.none;
+    const gradient = ctx.createRadialGradient(cx, cy, radius * 0.18, cx, cy, radius * 1.55);
+    const outerAlpha = 0.12 * pulse;
+    const innerAlpha = 0.22 * pulse;
+    gradient.addColorStop(0, colorWithAlpha(baseColor, innerAlpha));
+    gradient.addColorStop(0.5, colorWithAlpha(baseColor, outerAlpha));
+    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * 1.55, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.fillStyle = gradient;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private drawMechanicRings(ctx: CanvasRenderingContext2D) {
+    const active = this.getActiveMechanics();
+    if (active.length === 0) {
+      return;
+    }
+    const center = this.getCanvasCenter();
+    const baseRadius = this.getRingRadius();
+    active.forEach((type) => {
+      const styles = MECHANIC_RING_STYLES[type] ?? [];
+      if (styles.length === 0) return;
+      const baseAngle = this.mechanicRingAngles[type] ?? 0;
+      styles.forEach((style) => {
+        const radius = baseRadius * style.radiusScale;
+        const angle = baseAngle * (style.rotationScale ?? 1) + (style.rotationOffset ?? 0);
+        const mechanicColor = style.color ?? MECHANIC_COLORS[type];
+        const brighten = type === 'memory' && this.memorySymbolsHidden ? 0.35 : 0;
+        ctx.save();
+        ctx.translate(center.x, center.y);
+        ctx.lineWidth = style.thickness;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.globalAlpha = style.opacity ?? 0.95;
+        ctx.strokeStyle = colorWithAlpha(mechanicColor, 0.88, brighten);
+        ctx.shadowColor = colorWithAlpha(mechanicColor, 0.6, brighten);
+        ctx.shadowBlur = style.glow ?? 10;
+        style.segments.forEach((segment) => {
+          ctx.beginPath();
+          ctx.arc(
+            0,
+            0,
+            radius,
+            angle + segment.start * TAU,
+            angle + segment.end * TAU,
+            false
+          );
+          ctx.stroke();
+        });
+        ctx.restore();
+      });
     });
   }
 
@@ -579,8 +794,8 @@ export class Game implements InputHandler {
     const appearDuration = options?.appearDuration ?? 0.4;
     const offsetRatio = options?.offsetRatio ?? 0.06;
     const appearOffset = Math.max(10, Math.round(this.renderer.h * offsetRatio));
-    const disappearScale = options?.disappearScale ?? CENTER_BASE_SCALE * 0.55;
-    const enterScale = options?.enterScale ?? CENTER_MIN_SCALE;
+      const disappearScale = options?.disappearScale ?? this.centerBaseScale * 0.55;
+      const enterScale = options?.enterScale ?? this.centerMinScale;
 
     this.centerPos.x = center.x;
     this.centerPos.y = center.y;
@@ -591,7 +806,7 @@ export class Game implements InputHandler {
         const t = easeOutCubic(p);
         this.centerPos.x = lerp(center.x, target.x, t);
         this.centerPos.y = lerp(center.y, target.y, t);
-        this.centerScale = lerp(CENTER_BASE_SCALE, disappearScale, t);
+          this.centerScale = lerp(this.centerBaseScale, disappearScale, t);
         this.centerOpacity = 1 - t;
       },
       onDone: () => {
@@ -610,13 +825,13 @@ export class Game implements InputHandler {
             const t2 = easeOutCubic(p2);
             this.centerPos.x = center.x;
             this.centerPos.y = center.y + (1 - t2) * appearOffset;
-            this.centerScale = lerp(enterScale, CENTER_BASE_SCALE, t2);
+              this.centerScale = lerp(enterScale, this.centerBaseScale, t2);
             this.centerOpacity = Math.min(1, t2 * 1.1);
           },
           onDone: () => {
             this.centerPos.x = center.x;
             this.centerPos.y = center.y;
-            this.centerScale = CENTER_BASE_SCALE;
+              this.centerScale = this.centerBaseScale;
             this.centerOpacity = 1;
             this.recordPromptSpawn();
           }
@@ -728,7 +943,7 @@ export class Game implements InputHandler {
       exitDuration: 0.22,
       appearDuration: 0.34,
       offsetRatio: 0.06,
-      disappearScale: CENTER_BASE_SCALE * 0.5
+      disappearScale: this.centerBaseScale * 0.5
     });
   }
 
@@ -739,7 +954,7 @@ export class Game implements InputHandler {
       type: baseTypes[index % baseTypes.length],
       x: pos.x,
       y: pos.y,
-      scale: RING_SYMBOL_SCALE,
+      scale: this.ringSymbolScale,
       rotation: 0
     }));
 
@@ -747,7 +962,7 @@ export class Game implements InputHandler {
     this.spinState = null;
     this.reapplyActiveMechanicLayout();
     this.applyCenterSymbol(this.getRandomSymbolType());
-    this.centerScale = CENTER_BASE_SCALE;
+    this.centerScale = this.centerBaseScale;
     this.centerOpacity = 1;
     this.recordPromptSpawn();
     console.log('[debug] initSymbols created', this.symbols.length, 'symbols, currentTargetIndex=', this.currentTargetIndex, 'types=', this.symbols.map(s => s.type));
@@ -773,6 +988,9 @@ export class Game implements InputHandler {
     this.ringRotationOffset = 0;
     this.spinState = null;
     this.lastRandomMechanic = 'none';
+    (Object.keys(this.mechanicRingAngles) as MechanicType[]).forEach((key) => {
+      this.mechanicRingAngles[key] = 0;
+    });
     this.syncHighscore();
     this.timer.set(this.config.duration);
     this.initSymbols();
@@ -809,6 +1027,7 @@ export class Game implements InputHandler {
       }
     }
 
+    this.updateMechanicRings(dt);
     this.updateSpinAnimation(dt);
 
     // get current remaining time as float (used for game over check)
@@ -834,6 +1053,8 @@ export class Game implements InputHandler {
   private draw() {
     const r = this.renderer;
     r.clear('#0d1117');
+    this.drawRingBackdrop(r.ctx);
+    this.drawMechanicRings(r.ctx);
 
     const hideRing = this.activeMechanic === 'memory' && this.memorySymbolsHidden;
     const spinState = this.spinState && this.spinState.active ? this.spinState : null;
@@ -846,13 +1067,13 @@ export class Game implements InputHandler {
       r.ctx.save();
       r.ctx.filter = `blur(${blurAmount.toFixed(2)}px)`;
     }
-    this.symbols.forEach((symbol) => {
-      if (hideRing) {
-        return;
-      }
-      // ring answers are not the current prompt; draw with normal glow
-      drawSymbol(r.ctx, symbol, false);
-    });
+      this.symbols.forEach((symbol) => {
+        if (hideRing) {
+          return;
+        }
+        // ring answers are not the current prompt; draw with normal glow
+        drawSymbol(r.ctx, symbol, false, this.symbolStrokeScale);
+      });
     if (applyBlur) {
       r.ctx.restore();
     }
@@ -863,7 +1084,7 @@ export class Game implements InputHandler {
     const centerSym: Symbol = { type: this.centerSymbol, x: centerX, y: centerY, scale: this.centerScale, rotation: 0 };
     r.ctx.save();
     r.ctx.globalAlpha = this.centerOpacity;
-    drawSymbol(r.ctx, centerSym, true);
+    drawSymbol(r.ctx, centerSym, true, this.symbolStrokeScale);
     r.ctx.restore();
 
     // Draw HUD (streak, score, highscore)
@@ -912,7 +1133,8 @@ export class Game implements InputHandler {
     if (showRemapMapping || bannerText) {
       const center = this.getCanvasCenter();
       const radius = this.getRingRadius();
-      const rowScale = clamp(r.h * 0.0013, 0.52, 0.78);
+      const scaleFactor = this.ringSymbolScale / BASE_RING_SYMBOL_SCALE;
+      const rowScale = clamp(r.h * 0.0013, 0.52, 0.78) * scaleFactor;
       const symbolSize = 46 * rowScale;
       const spacing = Math.max(symbolSize * 0.32, 18);
       const arrowWidth = Math.max(symbolSize * 1.35, 54);
@@ -938,8 +1160,9 @@ export class Game implements InputHandler {
 
         const leftSymbol: Symbol = { type: this.remapMapping.from, x: leftX, y: mapY, scale: rowScale, rotation: 0 };
         const rightSymbol: Symbol = { type: this.remapMapping.to, x: rightX, y: mapY, scale: rowScale, rotation: 0 };
-        drawSymbol(r.ctx, leftSymbol, true);
-        drawSymbol(r.ctx, rightSymbol, true);
+        const bannerStroke = Math.max(0.4, this.symbolStrokeScale * 0.85);
+        drawSymbol(r.ctx, leftSymbol, true, bannerStroke);
+        drawSymbol(r.ctx, rightSymbol, true, bannerStroke);
 
         r.ctx.save();
         r.ctx.translate(arrowX, mapY);
