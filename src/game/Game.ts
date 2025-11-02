@@ -9,6 +9,8 @@ import type { InputHandler } from '../input/InputManager';
 import { InputManager } from '../input/InputManager';
 import { EffectsManager } from '../fx/EffectsManager';
 import { AudioManager } from '../audio/AudioManager';
+import correctSfxUrl from '../audio/sfx/sfx_point.wav';
+import wrongSfxUrl from '../audio/sfx/sfx_wrong.wav';
 import HighscoreStore from '../storage/HighscoreStore';
 import ConfigStore from '../storage/ConfigStore';
 import type { Config as PersistentConfig } from '../storage/ConfigStore';
@@ -250,8 +252,8 @@ export class Game implements InputHandler {
 
   private async loadAudio() {
     await Promise.all([
-      this.audio.load('correct', '/sounds/correct.mp3', 0.5),
-      this.audio.load('wrong', '/sounds/wrong.mp3', 0.3),
+      this.audio.load('correct', correctSfxUrl, 0.5),
+      this.audio.load('wrong', wrongSfxUrl, 0.3),
       this.audio.load('gameover', '/sounds/gameover.mp3', 0.6)
     ]);
   }
@@ -702,26 +704,8 @@ export class Game implements InputHandler {
   }
 
   private drawRingBackdrop(ctx: CanvasRenderingContext2D) {
-    const { x: cx, y: cy } = this.getCanvasCenter();
-    const radius = this.getRingRadius();
-    const pulseTime = this.time.get();
-    const pulse = 0.35 + 0.25 * (Math.sin(pulseTime * 1.6) * 0.5 + 0.5);
-    const baseColor = MECHANIC_COLORS[this.activeMechanic] ?? MECHANIC_COLORS.none;
-    const gradient = ctx.createRadialGradient(cx, cy, radius * 0.18, cx, cy, radius * 1.55);
-    const outerAlpha = 0.12 * pulse;
-    const innerAlpha = 0.22 * pulse;
-    gradient.addColorStop(0, colorWithAlpha(baseColor, innerAlpha));
-    gradient.addColorStop(0.5, colorWithAlpha(baseColor, outerAlpha));
-    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius * 1.55, 0, Math.PI * 2);
-    ctx.closePath();
-    ctx.fillStyle = gradient;
-    ctx.fill();
-    ctx.restore();
+    // Background glow removed per updated art direction.
+    void ctx;
   }
 
   private drawMechanicRings(ctx: CanvasRenderingContext2D) {
