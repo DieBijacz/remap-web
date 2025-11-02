@@ -1,4 +1,4 @@
-const CONFIG_KEY = 'remap:config';
+﻿const CONFIG_KEY = 'remap:config';
 
 export type Config = {
   palette?: string;
@@ -9,13 +9,23 @@ export type Config = {
   ringRadiusFactor?: number;
   minTimeBonus?: number;
   mechanicInterval?: number;
+  difficulty?: 'easy' | 'medium' | 'hard';
   mechanicRandomize?: boolean;
   symbolScale?: number;
   symbolStroke?: number;
   uiFontScale?: number;
+  memoryPreviewDuration?: number;
   particlesPerScore?: number;
   particlesEnabled?: boolean;
   particlesPersist?: boolean;
+  scoreRayEnabled?: boolean;
+  scoreRayThickness?: number;
+  scoreRayCount?: number;
+  scoreRayIntensity?: number;
+  mechanicEnableRemap?: boolean;
+  mechanicEnableSpin?: boolean;
+  mechanicEnableMemory?: boolean;
+  mechanicEnableJoystick?: boolean;
 };
 
 export default class ConfigStore {

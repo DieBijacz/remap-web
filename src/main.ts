@@ -3,7 +3,6 @@ import { Game } from './game/Game';
 import { GameStateManager, GameState } from './core/GameStateManager';
 import ConfigStore from './storage/ConfigStore';
 import type { Config as PersistentConfig } from './storage/ConfigStore';
-
 // Initialize game state manager
 const stateManager = new GameStateManager();
 
@@ -15,6 +14,13 @@ const ctx = canvas.getContext('2d')!;
 
 const configStore = new ConfigStore();
 const persistedConfig = configStore.load();
+const persistedMemoryPreview = persistedConfig.memoryPreviewDuration ?? 1;
+const persistedParticlesPerScore = persistedConfig.particlesPerScore ?? 4;
+const particlesEnabledDefault =
+  persistedParticlesPerScore > 0 ? persistedConfig.particlesEnabled ?? true : false;
+const persistedScoreRayCount = persistedConfig.scoreRayCount ?? 3;
+const scoreRayEnabledDefault =
+  persistedScoreRayCount > 0 ? persistedConfig.scoreRayEnabled ?? true : false;
 let settingsValues: PersistentConfig = {
   ...persistedConfig,
   initialTime: persistedConfig.initialTime ?? 60,
@@ -24,12 +30,22 @@ let settingsValues: PersistentConfig = {
   minTimeBonus: persistedConfig.minTimeBonus ?? 0.5,
   mechanicInterval: persistedConfig.mechanicInterval ?? 10,
   mechanicRandomize: persistedConfig.mechanicRandomize ?? false,
+  memoryPreviewDuration: persistedMemoryPreview,
+  difficulty: persistedConfig.difficulty ?? 'medium',
   symbolScale: persistedConfig.symbolScale ?? 1,
   symbolStroke: persistedConfig.symbolStroke ?? 1,
   uiFontScale: persistedConfig.uiFontScale ?? 0.9,
-  particlesPerScore: persistedConfig.particlesPerScore ?? 4,
-  particlesEnabled: persistedConfig.particlesEnabled ?? true,
-  particlesPersist: persistedConfig.particlesPersist ?? false
+  particlesPerScore: persistedParticlesPerScore,
+  particlesEnabled: particlesEnabledDefault,
+  particlesPersist: persistedConfig.particlesPersist ?? false,
+  scoreRayEnabled: scoreRayEnabledDefault,
+  scoreRayCount: persistedScoreRayCount,
+  scoreRayThickness: persistedConfig.scoreRayThickness ?? 1,
+  scoreRayIntensity: persistedConfig.scoreRayIntensity ?? 1,
+  mechanicEnableRemap: persistedConfig.mechanicEnableRemap ?? true,
+  mechanicEnableSpin: persistedConfig.mechanicEnableSpin ?? true,
+  mechanicEnableMemory: persistedConfig.mechanicEnableMemory ?? true,
+  mechanicEnableJoystick: persistedConfig.mechanicEnableJoystick ?? true
 };
 configStore.save(settingsValues);
 
@@ -61,9 +77,15 @@ type SettingItem =
       label: string;
       description?: string;
       onActivate: () => void;
+    }
+  | {
+      type: 'cycle';
+      key: keyof PersistentConfig;
+      label: string;
+      options: string[];
+      format?: (value: string) => string;
     };
-
-type SettingsTabKey = 'gameplay' | 'mechanics' | 'particles' | 'system';
+type SettingsTabKey = 'gameplay' | 'mechanics' | 'visual' | 'system';
 
 type SettingsTab = {
   key: SettingsTabKey;
@@ -96,6 +118,82 @@ const SETTINGS_TABS: SettingsTab[] = [
       },
       {
         type: 'number',
+        key: 'bonusWindow',
+        label: 'Bonus Window',
+        min: 0.5,
+        max: 6,
+        step: 0.1,
+        format: (v) => `${v.toFixed(1)} s`
+      },
+      {
+        type: 'cycle',
+        key: 'difficulty',
+        label: 'Difficulty',
+        options: ['easy', 'medium', 'hard'],
+        format: (value) => value.charAt(0).toUpperCase() + value.slice(1)
+      }
+    ]
+  },
+  {
+    key: 'mechanics',
+    label: 'Mechanics',
+    items: [
+      {
+        type: 'number',
+        key: 'mechanicInterval',
+        label: 'Mechanic Interval',
+        min: 3,
+        max: 30,
+        step: 1,
+        format: (v) => `${Math.round(v)} hits`
+      },
+      {
+        type: 'toggle',
+        key: 'mechanicRandomize',
+        label: 'Randomize Mechanics',
+        format: (value) => (value ? 'On' : 'Off')
+      },
+      {
+        type: 'toggle',
+        key: 'mechanicEnableRemap',
+        label: 'Remap Mechanic',
+        format: (value) => (value ? 'On' : 'Off')
+      },
+      {
+        type: 'toggle',
+        key: 'mechanicEnableSpin',
+        label: 'Spin Mechanic',
+        format: (value) => (value ? 'On' : 'Off')
+      },
+      {
+        type: 'toggle',
+        key: 'mechanicEnableMemory',
+        label: 'Memory Mechanic',
+        format: (value) => (value ? 'On' : 'Off')
+      },
+      {
+        type: 'number',
+        key: 'memoryPreviewDuration',
+        label: 'Memory Hide Delay',
+        min: 0.2,
+        max: 6,
+        step: 0.1,
+        format: (v) => `${v.toFixed(1)} s`
+      },
+      {
+        type: 'toggle',
+        key: 'mechanicEnableJoystick',
+        label: 'Joystick Invert',
+        format: (value) => (value ? 'On' : 'Off')
+      }
+    ]
+  },
+  {
+    key: 'visual',
+    label: 'Visual Effects',
+    items: [
+      {
+        type: 'number',
         key: 'ringRadiusFactor',
         label: 'Ring Radius',
         min: 0.08,
@@ -120,34 +218,7 @@ const SETTINGS_TABS: SettingsTab[] = [
         max: 1.8,
         step: 0.05,
         format: (v) => `${v.toFixed(2)}x`
-      }
-    ]
-  },
-  {
-    key: 'mechanics',
-    label: 'Mechanics',
-    items: [
-      {
-        type: 'number',
-        key: 'mechanicInterval',
-        label: 'Mechanic Interval',
-        min: 3,
-        max: 30,
-        step: 1,
-        format: (v) => `${Math.round(v)} hits`
       },
-      {
-        type: 'toggle',
-        key: 'mechanicRandomize',
-        label: 'Randomize Mechanics',
-        format: (value) => (value ? 'On' : 'Off')
-      }
-    ]
-  },
-  {
-    key: 'particles',
-    label: 'Particles',
-    items: [
       {
         type: 'toggle',
         key: 'particlesEnabled',
@@ -159,7 +230,7 @@ const SETTINGS_TABS: SettingsTab[] = [
         key: 'particlesPerScore',
         label: 'Particles per Hit',
         min: 0,
-        max: 12,
+        max: 20,
         step: 1,
         format: (v) => `${Math.round(v)}`
       },
@@ -168,6 +239,39 @@ const SETTINGS_TABS: SettingsTab[] = [
         key: 'particlesPersist',
         label: 'Keep Orbiting',
         format: (value) => (value ? 'On' : 'Off')
+      },
+      {
+        type: 'toggle',
+        key: 'scoreRayEnabled',
+        label: 'Score Ray Enabled',
+        format: (value) => (value ? 'On' : 'Off')
+      },
+      {
+        type: 'number',
+        key: 'scoreRayCount',
+        label: 'Ray Lines',
+        min: 0,
+        max: 12,
+        step: 1,
+        format: (v) => `${Math.round(v)}`
+      },
+      {
+        type: 'number',
+        key: 'scoreRayThickness',
+        label: 'Ray Thickness',
+        min: 0.2,
+        max: 3,
+        step: 0.1,
+        format: (v) => `${v.toFixed(1)}x`
+      },
+      {
+        type: 'number',
+        key: 'scoreRayIntensity',
+        label: 'Ray Intensity',
+        min: 0.3,
+        max: 2.5,
+        step: 0.1,
+        format: (v) => `${v.toFixed(1)}x`
       }
     ]
   },
@@ -278,6 +382,13 @@ function drawMenu() {
   startButtonRect = new DOMRect(btnX, startY, btnW, btnH);
   settingsButtonRect = new DOMRect(btnX, settingsY, btnW, btnH);
 
+  const hintY = settingsY + btnH + Math.max(28, Math.round(cssH * 0.05));
+  ctx.font = `${Math.max(12, Math.round(cssH * 0.03))}px Orbitron, sans-serif`;
+  ctx.fillStyle = 'rgba(148, 163, 184, 0.85)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('Press O to open options', cssW / 2, hintY);
+
   ctx.restore();
 }
 
@@ -367,7 +478,16 @@ function drawSettings() {
       ctx.font = `${valueSize}px Orbitron, sans-serif`;
       ctx.fillStyle = isSelected ? '#7ee787' : '#cbd5f5';
       ctx.fillText(text, cssW - marginX, displayY);
-    } else {
+    } else if (item.type === 'cycle') {
+      const raw = settingsValues[item.key];
+      const fallback = item.options[0] ?? '';
+      const value = typeof raw === 'string' && raw.length > 0 ? raw : fallback;
+      const text = item.format ? item.format(value) : value;
+      ctx.textAlign = 'right';
+      ctx.font = `${valueSize}px Orbitron, sans-serif`;
+      ctx.fillStyle = isSelected ? '#79c0ff' : '#cbd5f5';
+      ctx.fillText(text, cssW - marginX, displayY);
+    } else if (item.type === 'action') {
       ctx.textAlign = 'right';
       ctx.font = `${labelSize}px Orbitron, sans-serif`;
       ctx.fillStyle = isSelected ? '#7ee787' : '#94a3b8';
@@ -395,7 +515,7 @@ function drawSettings() {
   ctx.textAlign = 'center';
   ctx.font = `${Math.max(9, Math.round(cssH * 0.02 * fontScale))}px Orbitron, sans-serif`;
   ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
-  ctx.fillText('Use Q/E to change tabs, UP/DOWN to select, LEFT/RIGHT to adjust, Enter to confirm, Esc to exit', cssW / 2, btnY - Math.max(24, Math.round(cssH * 0.06)));
+  ctx.fillText('Press O to toggle options. Q/E tabs, UP/DOWN select, LEFT/RIGHT adjust, Enter confirm, Esc exit', cssW / 2, btnY - Math.max(24, Math.round(cssH * 0.06)));
   ctx.restore();
 }
 
@@ -480,7 +600,13 @@ function adjustNumberSetting(option: Extract<SettingItem, { type: 'number' }>, d
   const current = typeof currentRaw === 'number' ? currentRaw : option.min;
   const decimals = option.step.toString().split('.')[1]?.length ?? 0;
   const next = clampNumber(current + direction * option.step, option.min, option.max, decimals);
-  persistSettings({ [option.key]: next } as PersistentConfig);
+  const updates: Partial<PersistentConfig> = { [option.key]: next } as Partial<PersistentConfig>;
+  if (option.key === 'particlesPerScore') {
+    updates.particlesEnabled = next > 0;
+  } else if (option.key === 'scoreRayCount') {
+    updates.scoreRayEnabled = next > 0;
+  }
+  persistSettings(updates as PersistentConfig);
   settingsMessage = null;
   drawSettings();
 }
@@ -489,6 +615,25 @@ function toggleBooleanSetting(option: Extract<SettingItem, { type: 'toggle' }>) 
   const currentRaw = settingsValues[option.key];
   const next = !(typeof currentRaw === 'boolean' ? currentRaw : Boolean(currentRaw));
   persistSettings({ [option.key]: next } as PersistentConfig);
+  settingsMessage = null;
+  drawSettings();
+}
+
+function cycleOptionSetting(option: Extract<SettingItem, { type: 'cycle' }>, direction: number) {
+  const choices = option.options;
+  if (!choices.length) {
+    return;
+  }
+  const currentRaw = settingsValues[option.key];
+  const currentIndex = typeof currentRaw === 'string' ? choices.indexOf(currentRaw) : -1;
+  const nextIndex =
+    currentIndex === -1
+      ? direction > 0
+        ? 0
+        : choices.length - 1
+      : (currentIndex + direction + choices.length) % choices.length;
+  const nextValue = choices[nextIndex];
+  persistSettings({ [option.key]: nextValue } as PersistentConfig);
   settingsMessage = null;
   drawSettings();
 }
@@ -518,6 +663,9 @@ function handleSettingsKey(e: KeyboardEvent) {
       } else if (option?.type === 'toggle') {
         toggleBooleanSetting(option);
         e.preventDefault();
+      } else if (option?.type === 'cycle') {
+        cycleOptionSetting(option, -1);
+        e.preventDefault();
       }
       break;
     case 'ArrowRight':
@@ -526,6 +674,9 @@ function handleSettingsKey(e: KeyboardEvent) {
         e.preventDefault();
       } else if (option?.type === 'toggle') {
         toggleBooleanSetting(option);
+        e.preventDefault();
+      } else if (option?.type === 'cycle') {
+        cycleOptionSetting(option, +1);
         e.preventDefault();
       }
       break;
@@ -581,6 +732,15 @@ drawMenu();
 // Keyboard handling for game and settings
 document.addEventListener('keydown', (e) => {
   const state = stateManager.getCurrentState();
+  if (e.key === 'o' || e.key === 'O') {
+    if (state === GameState.SETTINGS) {
+      stateManager.showState(GameState.MENU);
+    } else {
+      stateManager.showState(GameState.SETTINGS);
+    }
+    e.preventDefault();
+    return;
+  }
   if (state === GameState.SETTINGS) {
     handleSettingsKey(e);
     return;

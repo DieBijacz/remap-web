@@ -1,4 +1,4 @@
-import { Clock, PausableTime } from '../core/Clock';
+﻿import { Clock, PausableTime } from '../core/Clock';
 import { Renderer2D } from '../render/Renderer2D';
 import { AnimationTimeline, easeOutCubic } from '../core/Animation';
 import { Timer } from '../core/Timer';
@@ -25,9 +25,15 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 const TAU = Math.PI * 2;
 const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const easeInOutCubicDerivative = (t: number) => (t < 0.5 ? 12 * t * t : 12 * Math.pow(1 - t, 2));
+const easeInCubic = (t: number) => t * t * t;
+const SCORE_PULSE_DURATION = 0.5;
+const SCORE_PULSE_SCALE = 0.12;
+const SCORE_TRACER_DURATION = 0.55;
+const SCORE_TRACER_TRAIL = 0.22;
+const SCORE_TRACER_THICKNESS = 5;
+const SCORE_TRACER_COUNT = 3;
 type Direction = 'up' | 'right' | 'down' | 'left';
 type MechanicType = 'none' | 'remap' | 'spin' | 'memory' | 'joystick';
-const MECHANIC_SEQUENCE: MechanicType[] = ['none', 'remap', 'spin', 'memory', 'joystick'];
 const MECHANIC_INTERVAL = 10;
 const MEMORY_PREVIEW_DURATION = 1.0;
 const RING_BASE_ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
@@ -50,6 +56,18 @@ interface RingStyle {
   glow?: number;
   opacity?: number;
 }
+
+type ScoreTracer = {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+  age: number;
+  duration: number;
+  color: string;
+  thickness: number;
+  trailWindow: number;
+  baseAlpha: number;
+  glow: number;
+};
 
 const hexToRgb = (hex: string) => {
   const normalized = hex.replace('#', '');
@@ -213,18 +231,34 @@ export class Game implements InputHandler {
   private currentMechanicBlock = 0;
   private mechanicInterval = MECHANIC_INTERVAL;
   private mechanicRandomize = false;
-  private activeMechanic: MechanicType = 'none';
+  private difficulty: 'easy' | 'medium' | 'hard' = 'medium';
+  private mechanicSlots = 1;
+  private activeMechanics: MechanicType[] = [];
   private mechanicBannerText: string | null = null;
   private remapMapping: { from: SymbolType; to: SymbolType } | null = null;
   private memoryRevealTimer = 0;
   private memorySymbolsHidden = false;
+  private memoryPreviewDuration = MEMORY_PREVIEW_DURATION;
   private joystickInverted = false;
   private ringRotationOffset = 0;
   private spinState: SpinState | null = null;
-  private lastRandomMechanic: MechanicType = 'none';
-  private particleDensity = 4;
+  private spinState: SpinState | null = null;
+  private lastMechanicSet: MechanicType[] = [];
   private particlesEnabled = true;
   private particlesPersist = false;
+  private scoreTracerEnabled = true;
+  private scoreTracerCountSetting = SCORE_TRACER_COUNT;
+  private scoreTracerThickness = 1;
+  private scoreTracerIntensity = 1;
+  private mechanicEnabled: Record<'remap' | 'spin' | 'memory' | 'joystick', boolean> = {
+    remap: true,
+    spin: true,
+    memory: true,
+    joystick: true
+  };
+  private scorePulseColor = '#79c0ff';
+  private scorePulseTimer = 0;
+  private scoreTracers: ScoreTracer[] = [];
   private mechanicRingAngles: Record<MechanicType, number> = {
     none: 0,
     remap: 0,
@@ -290,11 +324,31 @@ export class Game implements InputHandler {
     return copy;
   }
 
+  private getEnabledMechanicPool(): MechanicType[] {
+    return ['remap', 'spin', 'memory', 'joystick'].filter((mechanic) => this.mechanicEnabled[mechanic as keyof typeof this.mechanicEnabled]);
+  }
+
+  private pickRandomMechanicSet(pool: MechanicType[], count: number): MechanicType[] {
+    if (count <= 0 || pool.length === 0) return [];
+    const shuffled = this.shuffleArray(pool);
+    return shuffled.slice(0, count);
+  }
+
+  private pickSequentialMechanicSet(pool: MechanicType[], count: number, blockIndex: number): MechanicType[] {
+    if (count <= 0 || pool.length === 0) return [];
+    const offset = (blockIndex - 1) % pool.length;
+    const rotated = pool.slice(offset).concat(pool.slice(0, offset));
+    return rotated.slice(0, count);
+  }
+
   private rollRandomMechanic(exclude?: MechanicType): MechanicType {
-    const pool: MechanicType[] = ['remap', 'spin', 'memory', 'joystick'];
-    const filtered = pool.filter((mechanic) => mechanic !== exclude);
+    const pool = this.getEnabledMechanicPool();
+    if (pool.length === 0) {
+      return 'none';
+    }
+    const filtered = exclude ? pool.filter((mechanic) => mechanic !== exclude) : pool;
     const candidates = filtered.length > 0 ? filtered : pool;
-    return this.randomChoice<MechanicType>(candidates, candidates[0] ?? 'remap');
+    return this.randomChoice<MechanicType>(candidates, candidates[0] ?? pool[0]);
   }
 
   private applyDefaultRingOrder() {
@@ -384,10 +438,7 @@ export class Game implements InputHandler {
   }
 
   private getActiveMechanics(): MechanicType[] {
-    if (this.activeMechanic === 'none') {
-      return [];
-    }
-    return [this.activeMechanic];
+    return [...this.activeMechanics];
   }
 
   private updateMechanicRings(dt: number) {
@@ -427,7 +478,7 @@ export class Game implements InputHandler {
   }
 
   private getExpectedSymbolType(): SymbolType {
-    if (this.activeMechanic === 'remap' && this.remapMapping) {
+    if (this.activeMechanics.includes('remap') && this.remapMapping) {
       if (this.centerSymbol === this.remapMapping.from) {
         return this.remapMapping.to;
       }
@@ -436,7 +487,7 @@ export class Game implements InputHandler {
   }
 
   private mapInputDirection(dir: Direction): Direction {
-    if (!this.joystickInverted) {
+    if (!this.activeMechanics.includes('joystick')) {
       return dir;
     }
     switch (dir) {
@@ -449,13 +500,10 @@ export class Game implements InputHandler {
   }
 
   private ensureMemoryMessage() {
-    if (this.activeMechanic !== 'memory') {
+    if (!this.activeMechanics.includes('memory')) {
       return;
     }
-    const expected = this.memorySymbolsHidden ? 'Memory Recall' : 'Memory Prep';
-    if (this.mechanicBannerText !== expected) {
-      this.mechanicBannerText = expected;
-    }
+    this.updateMechanicBannerText();
   }
 
   private triggerMechanicFlash(type: MechanicType) {
@@ -464,57 +512,82 @@ export class Game implements InputHandler {
     this.effects.flash(colorWithAlpha(color, 1), 0.24, 0.22);
   }
 
-  private enterMechanic(next: MechanicType) {
-    if (next !== 'remap') {
-      this.remapMapping = null;
-    }
-    if (next !== 'joystick') {
-      this.joystickInverted = false;
-    }
-    if (next !== 'memory') {
-      this.memorySymbolsHidden = false;
-      this.memoryRevealTimer = 0;
-    }
-    if (next !== 'spin') {
-      this.cancelSpinAnimation(0);
-    }
-
-    this.activeMechanic = next;
-
-    switch (next) {
-      case 'none':
-        this.mechanicBannerText = null;
-        this.applyDefaultRingOrder();
-        break;
+  private activateMechanic(type: MechanicType) {
+    if (type === 'none' || this.activeMechanics.includes(type)) return;
+    switch (type) {
       case 'remap':
-        this.mechanicBannerText = null;
-        this.applyDefaultRingOrder();
         this.rollRemapMapping();
         break;
       case 'spin':
-        this.mechanicBannerText = 'Spin Mode';
         this.applySpinShuffle();
         break;
       case 'memory':
         this.memorySymbolsHidden = false;
-        this.memoryRevealTimer = MEMORY_PREVIEW_DURATION;
+        this.memoryRevealTimer = this.memoryPreviewDuration;
         this.applySpinShuffle();
-        this.mechanicBannerText = 'Memory Prep';
-        this.ensureMemoryMessage();
         break;
       case 'joystick':
         this.joystickInverted = true;
-        this.applyDefaultRingOrder();
-        this.mechanicBannerText = 'Joystick Flip';
         break;
       default:
-        this.mechanicBannerText = null;
         break;
     }
+    this.triggerMechanicFlash(type);
+  }
 
-    if (next !== 'none') {
-      this.triggerMechanicFlash(next);
+  private deactivateMechanic(type: MechanicType) {
+    switch (type) {
+      case 'remap':
+        this.remapMapping = null;
+        break;
+      case 'spin':
+        this.cancelSpinAnimation(0);
+        break;
+      case 'memory':
+        this.memorySymbolsHidden = false;
+        this.memoryRevealTimer = 0;
+        break;
+      case 'joystick':
+        this.joystickInverted = false;
+        break;
+      default:
+        break;
     }
+  }
+
+  private updateMechanicBannerText() {
+    const names = this.activeMechanics
+      .map((type) => this.getMechanicDescriptor(type))
+      .filter((value, index, array): value is string => !!value && array.indexOf(value) === index);
+    this.mechanicBannerText = names.length > 0 ? names.join('  |  ') : null;
+  }
+
+  private getMechanicDescriptor(type: MechanicType): string | null {
+    switch (type) {
+      case 'remap':
+        return this.remapMapping ? 'Remap' : 'Remap';
+      case 'spin':
+        return 'Spin Mode';
+      case 'memory':
+        return this.memorySymbolsHidden ? 'Memory Recall' : 'Memory Prep';
+      case 'joystick':
+        return 'Joystick Flip';
+      default:
+        return null;
+    }
+  }
+
+  private setActiveMechanics(next: MechanicType[]) {
+    const unique = Array.from(new Set(next.filter((type) => this.mechanicEnabled[type])));
+    const removed = this.activeMechanics.filter((type) => !unique.includes(type));
+    const added = unique.filter((type) => !this.activeMechanics.includes(type));
+
+    removed.forEach((type) => this.deactivateMechanic(type));
+    added.forEach((type) => this.activateMechanic(type));
+
+    this.activeMechanics = unique;
+    this.reapplyActiveMechanicLayout();
+    this.updateMechanicBannerText();
   }
 
   private refreshMechanic(mechanic: MechanicType) {
@@ -523,20 +596,18 @@ export class Game implements InputHandler {
         this.rollRemapMapping();
         break;
       case 'spin':
-        this.mechanicBannerText = 'Spin Mode';
         this.applySpinShuffle();
         break;
       case 'memory':
-        if (!this.memorySymbolsHidden) {
-          this.mechanicBannerText = 'Memory Prep';
-        }
-        if (this.memorySymbolsHidden) {
-          this.ensureMemoryMessage();
-        }
+        this.ensureMemoryMessage();
         break;
       default:
         break;
     }
+  }
+
+  private refreshActiveMechanics() {
+    this.activeMechanics.forEach((mechanic) => this.refreshMechanic(mechanic));
   }
 
   private updateMechanicsAfterCorrect() {
@@ -544,46 +615,47 @@ export class Game implements InputHandler {
       return;
     }
     const newBlock = Math.floor(this.correctAnswers / this.mechanicInterval);
-    let nextMechanic = this.activeMechanic;
+    const enabledMechanics = this.getEnabledMechanicPool();
+    const slots = Math.min(this.mechanicSlots, enabledMechanics.length);
 
     if (newBlock !== this.currentMechanicBlock) {
-      if (newBlock <= 0) {
-        nextMechanic = 'none';
-      } else if (this.mechanicRandomize) {
-        nextMechanic = this.rollRandomMechanic(this.lastRandomMechanic);
-      } else {
-        nextMechanic = MECHANIC_SEQUENCE[newBlock % MECHANIC_SEQUENCE.length];
-      }
-    }
-
-    if (nextMechanic !== 'none') {
-      this.lastRandomMechanic = nextMechanic;
-    }
-
-    if (newBlock !== this.currentMechanicBlock || nextMechanic !== this.activeMechanic) {
       this.currentMechanicBlock = newBlock;
-      this.enterMechanic(nextMechanic);
+      if (newBlock <= 0 || slots <= 0) {
+        this.setActiveMechanics([]);
+        this.lastMechanicSet = [];
+        return;
+      }
+
+      const next = this.mechanicRandomize
+        ? this.pickRandomMechanicSet(enabledMechanics, slots)
+        : this.pickSequentialMechanicSet(enabledMechanics, slots, newBlock);
+
+      this.setActiveMechanics(next);
+      this.lastMechanicSet = next;
     } else {
-      this.refreshMechanic(this.activeMechanic);
+      if (this.activeMechanics.length === 0 && slots > 0) {
+        const next = this.pickRandomMechanicSet(enabledMechanics, slots);
+        this.setActiveMechanics(next);
+        this.lastMechanicSet = next;
+      } else {
+        this.refreshActiveMechanics();
+      }
     }
   }
 
   private reapplyActiveMechanicLayout() {
-    switch (this.activeMechanic) {
-      case 'none':
-        this.applyDefaultRingOrder();
-        break;
-      case 'spin':
-        this.applySpinShuffle();
-        break;
-      case 'memory':
-        this.applySpinShuffle();
-        this.memorySymbolsHidden = false;
-        this.memoryRevealTimer = MEMORY_PREVIEW_DURATION;
-        this.ensureMemoryMessage();
-        break;
-      default:
-        break;
+    this.applyDefaultRingOrder();
+    if (this.activeMechanics.includes('spin') || this.activeMechanics.includes('memory')) {
+      this.applySpinShuffle();
+    }
+    if (!this.activeMechanics.includes('memory')) {
+      this.memorySymbolsHidden = false;
+      this.memoryRevealTimer = 0;
+    } else {
+      this.ensureMemoryMessage();
+    }
+    if (!this.activeMechanics.includes('joystick')) {
+      this.joystickInverted = false;
     }
   }
 
@@ -602,6 +674,16 @@ export class Game implements InputHandler {
 
   private getCanvasCenter() {
     return { x: this.renderer.w / 2, y: this.renderer.h / 2 };
+  }
+
+  private getScoreAnchor() {
+    const scoreFontSize = Math.max(24, Math.round(this.renderer.h * 0.08));
+    const hudPad = Math.round(Math.max(8, this.renderer.h * 0.02));
+    return {
+      x: Math.round(this.renderer.w / 2),
+      y: Math.round(hudPad) + scoreFontSize / 2,
+      fontSize: scoreFontSize
+    };
   }
 
   private syncHighscore() {
@@ -660,6 +742,10 @@ export class Game implements InputHandler {
       this.updateRingLayout();
     }
 
+    const difficultySetting = typeof data.difficulty === 'string' ? data.difficulty : this.difficulty;
+    this.difficulty = difficultySetting === 'easy' || difficultySetting === 'hard' ? difficultySetting : 'medium';
+    this.mechanicSlots = this.difficulty === 'easy' ? 1 : this.difficulty === 'hard' ? 3 : 2;
+
     const rawInterval = typeof data.mechanicInterval === 'number' ? data.mechanicInterval : this.mechanicInterval;
     const clampedInterval = Math.max(1, Math.round(clamp(rawInterval, 1, 60)));
     const randomize = Boolean(data.mechanicRandomize ?? false);
@@ -670,21 +756,57 @@ export class Game implements InputHandler {
     this.mechanicRandomize = randomize;
 
     if (intervalChanged || randomChanged) {
-      if (randomChanged && !this.mechanicRandomize) {
-        this.lastRandomMechanic = 'none';
+      if (!this.mechanicRandomize) {
+        this.lastMechanicSet = [];
       }
       this.updateMechanicsAfterCorrect();
     }
 
+    const memoryPreviewSetting =
+      typeof data.memoryPreviewDuration === 'number' ? data.memoryPreviewDuration : this.memoryPreviewDuration;
+    this.memoryPreviewDuration = clamp(memoryPreviewSetting, 0.2, 6);
+
     const particleSetting = typeof data.particlesPerScore === 'number' ? data.particlesPerScore : this.particleDensity;
     this.particleDensity = clamp(particleSetting, 0, 20);
     const particlesEnabledSetting = data.particlesEnabled;
-    this.particlesEnabled = particlesEnabledSetting !== false;
+    const particlesActive = particlesEnabledSetting !== false && this.particleDensity > 0;
+    this.particlesEnabled = particlesActive;
     const particlesPersistSetting = data.particlesPersist;
     this.particlesPersist = Boolean(particlesPersistSetting);
     this.particles.setDespawnEnabled(!this.particlesPersist);
     if (!this.particlesEnabled) {
       this.particles.clear();
+    }
+
+    const tracerCountSetting = typeof data.scoreRayCount === 'number' ? data.scoreRayCount : this.scoreTracerCountSetting;
+    this.scoreTracerCountSetting = clamp(tracerCountSetting, 0, 12);
+    const tracerEnabledSetting = data.scoreRayEnabled;
+    const scoreTracerActive = tracerEnabledSetting !== false && this.scoreTracerCountSetting > 0;
+    this.scoreTracerEnabled = scoreTracerActive;
+    const tracerThicknessSetting = typeof data.scoreRayThickness === 'number' ? data.scoreRayThickness : this.scoreTracerThickness;
+    this.scoreTracerThickness = clamp(tracerThicknessSetting, 0.2, 3);
+    const tracerIntensitySetting = typeof data.scoreRayIntensity === 'number' ? data.scoreRayIntensity : this.scoreTracerIntensity;
+    this.scoreTracerIntensity = clamp(tracerIntensitySetting, 0.3, 2.5);
+    if (!this.scoreTracerEnabled) {
+      this.scoreTracers = [];
+    }
+
+    const nextMechanicEnabled: typeof this.mechanicEnabled = {
+      remap: data.mechanicEnableRemap !== false,
+      spin: data.mechanicEnableSpin !== false,
+      memory: data.mechanicEnableMemory !== false,
+      joystick: data.mechanicEnableJoystick !== false
+    };
+    const mechanicsChanged = (Object.keys(nextMechanicEnabled) as Array<keyof typeof nextMechanicEnabled>).some(
+      (key) => this.mechanicEnabled[key] !== nextMechanicEnabled[key]
+    );
+    this.mechanicEnabled = nextMechanicEnabled;
+    if (mechanicsChanged) {
+      const filtered = this.activeMechanics.filter((type) => this.mechanicEnabled[type]);
+      if (filtered.length !== this.activeMechanics.length) {
+        this.setActiveMechanics(filtered);
+      }
+      this.updateMechanicsAfterCorrect();
     }
   }
 
@@ -866,7 +988,7 @@ export class Game implements InputHandler {
   }
 
   private handleInput(inputDir: Direction) {
-    console.log('[debug] handleInput', { inputDir, symbolCount: this.symbols.length, mechanic: this.activeMechanic });
+    console.log('[debug] handleInput', { inputDir, symbolCount: this.symbols.length, mechanics: this.activeMechanics });
 
     const dirToIndex: Record<Direction, number> = {
       up: 0,
@@ -909,9 +1031,9 @@ export class Game implements InputHandler {
     }
 
     // Visual and sound feedback
-    this.effects.flash('#2ea043', 0.2);
     this.effects.symbolPulse({ current: ringSymbol.scale });
     this.audio.play('correct');
+    this.triggerScoreCelebration(ringSymbol);
     this.triggerScoreParticles(ringSymbol);
 
     this.correctAnswers += 1;
@@ -969,6 +1091,117 @@ export class Game implements InputHandler {
     });
   }
 
+  private triggerScoreCelebration(ringSymbol: Symbol) {
+    this.scorePulseTimer = SCORE_PULSE_DURATION;
+    const target = this.getScoreAnchor();
+    const palette = SYMBOL_PALETTES[ringSymbol.type];
+    this.scorePulseColor = palette.glow;
+
+    if (!this.scoreTracerEnabled) {
+      return;
+    }
+
+    const tracerCountSetting = Math.max(0, Math.round(this.scoreTracerCountSetting));
+    if (tracerCountSetting <= 0) {
+      return;
+    }
+
+    const intensity = clamp(this.scoreTracerIntensity, 0.3, 2.5);
+    const thicknessBase = SCORE_TRACER_THICKNESS * this.scoreTracerThickness;
+    const speedFactor = 0.6 + intensity * 0.4;
+    const durationBase = SCORE_TRACER_DURATION / speedFactor;
+    const baseTrail = clamp(SCORE_TRACER_TRAIL / speedFactor, 0.05, 0.65);
+    const baseAlpha = clamp(0.55 + (intensity - 1) * 0.25, 0.35, 0.95);
+    const baseGlow = 12 * (0.6 + intensity * 0.7);
+    const tracerColor = colorWithAlpha(palette.glow, 0.82, 0.3);
+    const start = { x: ringSymbol.x, y: ringSymbol.y };
+
+    for (let i = 0; i < tracerCountSetting; i += 1) {
+      const jitter = (Math.random() - 0.5) * 0.12;
+      const offsetX = (Math.random() - 0.5) * 26;
+      const offsetY = (Math.random() - 0.5) * 18;
+      const duration = durationBase * (0.85 + Math.random() * 0.3);
+      const trailWindow = clamp(baseTrail * (0.85 + Math.random() * 0.3), 0.04, 0.75);
+      const thickness = thicknessBase * (0.85 + Math.random() * 0.3);
+      const alpha = clamp(baseAlpha * (0.9 + Math.random() * 0.2), 0.3, 1);
+      const glow = baseGlow * (0.8 + Math.random() * 0.3);
+
+      this.scoreTracers.push({
+        start: { x: start.x + offsetX, y: start.y + offsetY },
+        end: { x: target.x + offsetX * 0.15, y: target.y + offsetY * 0.1 },
+        age: jitter > 0 ? jitter * 0.15 : 0,
+        duration,
+        color: tracerColor,
+        thickness,
+        trailWindow,
+        baseAlpha: alpha,
+        glow
+      });
+    }
+    const maxTracers = Math.max(1, tracerCountSetting) * 12;
+    if (this.scoreTracers.length > maxTracers) {
+      this.scoreTracers.splice(0, this.scoreTracers.length - maxTracers);
+    }
+  }
+
+  private updateScoreTracers(dt: number) {
+    if (!this.scoreTracerEnabled) {
+      this.scoreTracers = [];
+      return;
+    }
+    for (let i = this.scoreTracers.length - 1; i >= 0; i -= 1) {
+      const tracer = this.scoreTracers[i];
+      tracer.age += dt;
+      if (tracer.age >= tracer.duration) {
+        this.scoreTracers.splice(i, 1);
+      }
+    }
+  }
+
+  private drawScoreTracers(ctx: CanvasRenderingContext2D) {
+    if (!this.scoreTracerEnabled || this.scoreTracers.length === 0) return;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    this.scoreTracers.forEach((tracer) => {
+      const progress = Math.min(1, Math.max(0, tracer.age / tracer.duration));
+      const headT = easeOutCubic(progress);
+      const trailWindow = clamp(tracer.trailWindow, 0, 0.95);
+      const tailProgress = Math.max(0, progress - trailWindow);
+      const denominator = Math.max(0.0001, 1 - trailWindow);
+      const tailNormalized = trailWindow >= 1 ? progress : Math.min(1, tailProgress / denominator);
+      const tailT = easeOutCubic(tailNormalized);
+
+      const dx = tracer.end.x - tracer.start.x;
+      const dy = tracer.end.y - tracer.start.y;
+      const headX = tracer.start.x + dx * headT;
+      const headY = tracer.start.y + dy * headT;
+      const tailX = tracer.start.x + dx * tailT;
+      const tailY = tracer.start.y + dy * tailT;
+
+      const width = tracer.thickness * (0.6 + 0.4 * (1 - progress));
+      ctx.shadowColor = tracer.color;
+      ctx.shadowBlur = tracer.glow;
+      ctx.strokeStyle = tracer.color;
+      ctx.lineWidth = width;
+      ctx.globalAlpha = Math.max(0, Math.min(1, tracer.baseAlpha * (1 - progress * 0.75)));
+      ctx.beginPath();
+      ctx.moveTo(tailX, tailY);
+      ctx.lineTo(headX, headY);
+      ctx.stroke();
+
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = Math.max(0, Math.min(1, (tracer.baseAlpha + 0.1) * (1 - progress * 0.6)));
+      ctx.fillStyle = tracer.color;
+      ctx.beginPath();
+      ctx.arc(headX, headY, width * 0.45, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    });
+    ctx.restore();
+  }
+
   private initSymbols() {
     const positions = this.computeRingPositions(0);
     const baseTypes = RING_SYMBOL_TYPES.slice(0, positions.length);
@@ -1001,7 +1234,8 @@ export class Game implements InputHandler {
     this.timeDeltaTimer = 0;
     this.correctAnswers = 0;
     this.currentMechanicBlock = 0;
-    this.activeMechanic = 'none';
+    this.activeMechanics = [];
+    this.lastMechanicSet = [];
     this.mechanicBannerText = null;
     this.remapMapping = null;
     this.memoryRevealTimer = 0;
@@ -1016,6 +1250,9 @@ export class Game implements InputHandler {
     this.syncHighscore();
     this.timer.set(this.config.duration);
     this.initSymbols();
+    this.scorePulseTimer = 0;
+    this.scorePulseColor = '#79c0ff';
+    this.scoreTracers = [];
     this.particles.clear();
     this.particles.setDespawnEnabled(!this.particlesPersist);
     console.log('[debug] Game.start() called');
@@ -1033,6 +1270,10 @@ export class Game implements InputHandler {
     if (this.particlesEnabled) {
       this.particles.update(dt);
     }
+    if (this.scorePulseTimer > 0) {
+      this.scorePulseTimer = Math.max(0, this.scorePulseTimer - dt);
+    }
+    this.updateScoreTracers(dt);
     if (this.timeDeltaTimer > 0) {
       this.timeDeltaTimer = Math.max(0, this.timeDeltaTimer - dt);
       if (this.timeDeltaTimer <= 0.0001) {
@@ -1041,7 +1282,7 @@ export class Game implements InputHandler {
       }
     }
 
-    if (this.activeMechanic === 'memory' && !this.memorySymbolsHidden) {
+    if (this.activeMechanics.includes('memory') && !this.memorySymbolsHidden) {
       if (this.memoryRevealTimer > 0) {
         this.memoryRevealTimer = Math.max(0, this.memoryRevealTimer - dt);
         if (this.memoryRevealTimer <= 0) {
@@ -1083,7 +1324,7 @@ export class Game implements InputHandler {
     this.drawRingBackdrop(r.ctx);
     this.drawMechanicRings(r.ctx);
 
-    const hideRing = this.activeMechanic === 'memory' && this.memorySymbolsHidden;
+    const hideRing = this.activeMechanics.includes('memory') && this.memorySymbolsHidden;
     const spinState = this.spinState && this.spinState.active ? this.spinState : null;
     const velocity = spinState ? Math.abs(spinState.velocity) : 0;
     const blurAmount = spinState ? clamp(velocity * 0.1, 0, 5.5) : 0;
@@ -1124,21 +1365,35 @@ export class Game implements InputHandler {
     const hudPad = Math.round(Math.max(8, r.h * 0.02));
     const topY = Math.round(hudPad);
     const hudCenterX = Math.round(r.w / 2);
-    r.ctx.textBaseline = 'top';
-    r.ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    const scoreCenterY = topY + scoreFontSize / 2;
+    const scorePulseRatio = Math.min(1, Math.max(0, this.scorePulseTimer / SCORE_PULSE_DURATION));
+    const scorePulse = scorePulseRatio > 0 ? easeInCubic(scorePulseRatio) : 0;
+    const scoreScale = 1 + SCORE_PULSE_SCALE * scorePulse;
+    const scoreGlow = 0;
+    const scoreGlowColor = 'rgba(0, 0, 0, 0)';
 
-    // Score prominent in the center
+    this.drawScoreTracers(r.ctx);
+
+    r.ctx.save();
+    r.ctx.textBaseline = 'top';
+    r.ctx.textAlign = 'center';
+    r.ctx.translate(hudCenterX, scoreCenterY);
+    r.ctx.scale(scoreScale, scoreScale);
+    r.ctx.translate(-hudCenterX, -scoreCenterY);
     r.ctx.font = `${scoreFontSize}px Orbitron, sans-serif`;
     r.ctx.fillStyle = '#ffffff';
-    r.ctx.textAlign = 'center';
-    r.ctx.shadowBlur = 6;
+    r.ctx.shadowColor = scoreGlowColor;
+    r.ctx.shadowBlur = scoreGlow;
     r.ctx.fillText(`${this.score}`, hudCenterX, topY);
+    r.ctx.restore();
+    r.ctx.shadowBlur = 3;
+    r.ctx.shadowColor = 'rgba(0,0,0,0.6)';
 
     // Side HUD entries
     const labelFontSize = Math.max(10, Math.round(scoreFontSize * 0.26));
     const valueFontSize = Math.max(14, Math.round(scoreFontSize * 0.44));
     const labelOffset = Math.max(2, Math.round(r.h * 0.004));
-    r.ctx.shadowBlur = 3;
+    r.ctx.textBaseline = 'top';
 
     // Streak (left)
     r.ctx.textAlign = 'left';
@@ -1159,8 +1414,8 @@ export class Game implements InputHandler {
     r.ctx.fillText(`${this.highscore}`, r.w - hudPad, topY + labelFontSize + labelOffset);
     r.ctx.restore();
 
-    const showRemapMapping = this.activeMechanic === 'remap' && this.remapMapping;
-    const bannerText = !showRemapMapping && this.mechanicBannerText ? this.mechanicBannerText.trim() : '';
+    const showRemapMapping = this.activeMechanics.includes('remap') && this.remapMapping;
+    const bannerText = this.mechanicBannerText ? this.mechanicBannerText.trim() : '';
     if (showRemapMapping || bannerText) {
       const center = this.getCanvasCenter();
       const radius = this.getRingRadius();
@@ -1217,16 +1472,17 @@ export class Game implements InputHandler {
         r.ctx.shadowBlur = 14;
         r.ctx.fill();
         r.ctx.restore();
-      } else if (bannerText) {
+      }
+      if (bannerText) {
         r.ctx.save();
         r.ctx.font = `${Math.max(18, Math.round(r.h * 0.05))}px Orbitron, sans-serif`;
         r.ctx.textAlign = 'center';
         r.ctx.textBaseline = 'middle';
-        const color = MECHANIC_COLORS[this.activeMechanic] ?? MECHANIC_COLORS.none;
-        r.ctx.fillStyle = color;
+        const textY = showRemapMapping ? mapY + symbolSize : mapY;
+        r.ctx.fillStyle = colorWithAlpha('#9da7b3', 0.95);
         r.ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
         r.ctx.shadowBlur = 10;
-        r.ctx.fillText(bannerText, r.w / 2, mapY);
+        r.ctx.fillText(bannerText, r.w / 2, textY);
         r.ctx.restore();
       }
     }

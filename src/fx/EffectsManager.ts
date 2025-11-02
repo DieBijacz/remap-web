@@ -37,6 +37,20 @@ export class EffectsManager {
     // Force reflow
     overlay.offsetHeight;
 
+    const safeDuration = Math.max(0, duration);
+    const timeoutId = window.setTimeout(() => {
+      if (overlay) {
+        overlay.remove();
+        overlay = null;
+      }
+    }, safeDuration * 1000 + 32);
+
+    requestAnimationFrame(() => {
+      if (overlay) {
+        overlay.style.opacity = '0';
+      }
+    });
+
     this.addEffect({
       duration,
       elapsed: 0,
@@ -48,6 +62,7 @@ export class EffectsManager {
       onComplete: () => {
         overlay?.remove();
         overlay = null;
+        window.clearTimeout(timeoutId);
       }
     });
   }
