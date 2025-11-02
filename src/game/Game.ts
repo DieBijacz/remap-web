@@ -223,6 +223,8 @@ export class Game implements InputHandler {
   private spinState: SpinState | null = null;
   private lastRandomMechanic: MechanicType = 'none';
   private particleDensity = 4;
+  private particlesEnabled = true;
+  private particlesPersist = false;
   private mechanicRingAngles: Record<MechanicType, number> = {
     none: 0,
     remap: 0,
@@ -676,6 +678,14 @@ export class Game implements InputHandler {
 
     const particleSetting = typeof data.particlesPerScore === 'number' ? data.particlesPerScore : this.particleDensity;
     this.particleDensity = clamp(particleSetting, 0, 20);
+    const particlesEnabledSetting = data.particlesEnabled;
+    this.particlesEnabled = particlesEnabledSetting !== false;
+    const particlesPersistSetting = data.particlesPersist;
+    this.particlesPersist = Boolean(particlesPersistSetting);
+    this.particles.setDespawnEnabled(!this.particlesPersist);
+    if (!this.particlesEnabled) {
+      this.particles.clear();
+    }
   }
 
   private getRingRadius() {
@@ -938,7 +948,7 @@ export class Game implements InputHandler {
   }
 
   private triggerScoreParticles(ringSymbol: Symbol) {
-    if (this.particleDensity <= 0) return;
+    if (!this.particlesEnabled || this.particleDensity <= 0) return;
 
     const palette = SYMBOL_PALETTES[ringSymbol.type];
     const center = this.getCanvasCenter();
@@ -1007,6 +1017,7 @@ export class Game implements InputHandler {
     this.timer.set(this.config.duration);
     this.initSymbols();
     this.particles.clear();
+    this.particles.setDespawnEnabled(!this.particlesPersist);
     console.log('[debug] Game.start() called');
     this.time.resumeLayer();
     this.clock.start((dt) => this.update(dt));
@@ -1019,7 +1030,9 @@ export class Game implements InputHandler {
     this.time.tick(dt);
     this.timer.tick(dt);
     this.effects.update(dt);
-    this.particles.update(dt);
+    if (this.particlesEnabled) {
+      this.particles.update(dt);
+    }
     if (this.timeDeltaTimer > 0) {
       this.timeDeltaTimer = Math.max(0, this.timeDeltaTimer - dt);
       if (this.timeDeltaTimer <= 0.0001) {
@@ -1092,7 +1105,9 @@ export class Game implements InputHandler {
       r.ctx.restore();
     }
 
-    this.particles.draw(r.ctx);
+    if (this.particlesEnabled) {
+      this.particles.draw(r.ctx);
+    }
 
     // Draw center prompt symbol larger in the middle (may be animating)
     const centerX = this.centerPos.x || r.w / 2;

@@ -14,6 +14,8 @@ export type Config = {
   symbolStroke?: number;
   uiFontScale?: number;
   particlesPerScore?: number;
+  particlesEnabled?: boolean;
+  particlesPersist?: boolean;
 };
 
 export default class ConfigStore {
