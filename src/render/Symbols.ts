@@ -16,7 +16,7 @@ export const createSymbol = (x: number, y: number, type: SymbolType): Symbol => 
   rotation: 0
 });
 
-const NEON_COLORS: Record<SymbolType, { glow: string; inner: string; ambient: string }> = {
+export const SYMBOL_PALETTES: Record<SymbolType, { glow: string; inner: string; ambient: string }> = {
   square: { glow: '#ffd95a', inner: '#fff9e6', ambient: 'rgba(255, 217, 90, 0.35)' },
   circle: { glow: '#ff63c0', inner: '#ffe6f8', ambient: 'rgba(255, 99, 192, 0.32)' },
   triangle: { glow: '#4fe49b', inner: '#edfff6', ambient: 'rgba(79, 228, 155, 0.30)' },
@@ -63,7 +63,7 @@ export const drawSymbol = (
   strokeScale: number = 1
 ) => {
   const { x, y, scale, rotation, type } = symbol;
-  const palette = NEON_COLORS[type];
+  const palette = SYMBOL_PALETTES[type];
   const size = 46 * scale;
   const glowLine = size * (type === 'cross' ? 0.10 : 0.09) * strokeScale;
   const innerLine = size * (type === 'cross' ? 0.06 : 0.048) * strokeScale;

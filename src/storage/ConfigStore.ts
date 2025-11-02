@@ -13,6 +13,7 @@ export type Config = {
   symbolScale?: number;
   symbolStroke?: number;
   uiFontScale?: number;
+  particlesPerScore?: number;
 };
 
 export default class ConfigStore {

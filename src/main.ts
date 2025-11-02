@@ -1,4 +1,4 @@
-import './styles/ui.scss';
+﻿import './styles/ui.scss';
 import { Game } from './game/Game';
 import { GameStateManager, GameState } from './core/GameStateManager';
 import ConfigStore from './storage/ConfigStore';
@@ -26,7 +26,8 @@ let settingsValues: PersistentConfig = {
   mechanicRandomize: persistedConfig.mechanicRandomize ?? false,
   symbolScale: persistedConfig.symbolScale ?? 1,
   symbolStroke: persistedConfig.symbolStroke ?? 1,
-  uiFontScale: persistedConfig.uiFontScale ?? 0.9
+  uiFontScale: persistedConfig.uiFontScale ?? 0.9,
+  particlesPerScore: persistedConfig.particlesPerScore ?? 4
 };
 configStore.save(settingsValues);
 
@@ -105,7 +106,16 @@ const SETTINGS_ITEMS: SettingItem[] = [
     min: 0.5,
     max: 1.8,
     step: 0.05,
-    format: (v) => `×${v.toFixed(2)}`
+    format: (v) => `${v.toFixed(2)}x`
+  },
+  {
+    type: 'number',
+    key: 'particlesPerScore',
+    label: 'Particles per Hit',
+    min: 0,
+    max: 12,
+    step: 1,
+    format: (v) => `${Math.round(v)}`
   },
   { type: 'label', label: 'Mechanics' },
   {

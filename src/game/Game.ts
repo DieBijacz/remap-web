@@ -2,12 +2,12 @@ import { Clock, PausableTime } from '../core/Clock';
 import { Renderer2D } from '../render/Renderer2D';
 import { AnimationTimeline, easeOutCubic } from '../core/Animation';
 import { Timer } from '../core/Timer';
-import { drawSymbol } from '../render/Symbols';
-import type { Symbol } from '../render/Symbols';
-import type { SymbolType } from '../render/Symbols';
+import { drawSymbol, SYMBOL_PALETTES } from '../render/Symbols';
+import type { Symbol, SymbolType } from '../render/Symbols';
 import type { InputHandler } from '../input/InputManager';
 import { InputManager } from '../input/InputManager';
 import { EffectsManager } from '../fx/EffectsManager';
+import { ParticleSystem } from '../fx/ParticleSystem';
 import { AudioManager } from '../audio/AudioManager';
 import correctSfxUrl from '../audio/sfx/sfx_point.wav';
 import wrongSfxUrl from '../audio/sfx/sfx_wrong.wav';
@@ -164,6 +164,7 @@ export class Game implements InputHandler {
   private anim = new AnimationTimeline();
   private input: InputManager;
   private effects: EffectsManager;
+  private particles = new ParticleSystem();
   private audio: AudioManager;
   private score = 0;
   private streak = 0;
@@ -221,6 +222,7 @@ export class Game implements InputHandler {
   private ringRotationOffset = 0;
   private spinState: SpinState | null = null;
   private lastRandomMechanic: MechanicType = 'none';
+  private particleDensity = 4;
   private mechanicRingAngles: Record<MechanicType, number> = {
     none: 0,
     remap: 0,
@@ -671,6 +673,9 @@ export class Game implements InputHandler {
       }
       this.updateMechanicsAfterCorrect();
     }
+
+    const particleSetting = typeof data.particlesPerScore === 'number' ? data.particlesPerScore : this.particleDensity;
+    this.particleDensity = clamp(particleSetting, 0, 20);
   }
 
   private getRingRadius() {
@@ -897,6 +902,7 @@ export class Game implements InputHandler {
     this.effects.flash('#2ea043', 0.2);
     this.effects.symbolPulse({ current: ringSymbol.scale });
     this.audio.play('correct');
+    this.triggerScoreParticles(ringSymbol);
 
     this.correctAnswers += 1;
     this.updateMechanicsAfterCorrect();
@@ -928,6 +934,28 @@ export class Game implements InputHandler {
       appearDuration: 0.34,
       offsetRatio: 0.06,
       disappearScale: this.centerBaseScale * 0.5
+    });
+  }
+
+  private triggerScoreParticles(ringSymbol: Symbol) {
+    if (this.particleDensity <= 0) return;
+
+    const palette = SYMBOL_PALETTES[ringSymbol.type];
+    const center = this.getCanvasCenter();
+    const ringRadius = this.getRingRadius();
+    const intensity = 1 + Math.min(this.streak, 20) * 0.08;
+    const count = Math.max(0, Math.round(this.particleDensity * intensity));
+    if (count <= 0) return;
+
+    const brighten = Math.min(0.45, (this.streak - 1) * 0.025);
+    const color = colorWithAlpha(palette.glow, 0.85, brighten);
+    this.particles.spawnBurst({
+      center,
+      origin: { x: ringSymbol.x, y: ringSymbol.y },
+      ringRadius,
+      color,
+      count,
+      intensity
     });
   }
 
@@ -978,6 +1006,7 @@ export class Game implements InputHandler {
     this.syncHighscore();
     this.timer.set(this.config.duration);
     this.initSymbols();
+    this.particles.clear();
     console.log('[debug] Game.start() called');
     this.time.resumeLayer();
     this.clock.start((dt) => this.update(dt));
@@ -990,6 +1019,7 @@ export class Game implements InputHandler {
     this.time.tick(dt);
     this.timer.tick(dt);
     this.effects.update(dt);
+    this.particles.update(dt);
     if (this.timeDeltaTimer > 0) {
       this.timeDeltaTimer = Math.max(0, this.timeDeltaTimer - dt);
       if (this.timeDeltaTimer <= 0.0001) {
@@ -1061,6 +1091,8 @@ export class Game implements InputHandler {
     if (applyBlur) {
       r.ctx.restore();
     }
+
+    this.particles.draw(r.ctx);
 
     // Draw center prompt symbol larger in the middle (may be animating)
     const centerX = this.centerPos.x || r.w / 2;
