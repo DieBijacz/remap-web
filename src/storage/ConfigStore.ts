@@ -9,7 +9,7 @@ export type Config = {
   ringRadiusFactor?: number;
   minTimeBonus?: number;
   mechanicInterval?: number;
-  difficulty?: 'easy' | 'medium' | 'hard';
+  difficulty?: 'easy' | 'medium' | 'hard' | 'progressive';
   mechanicRandomize?: boolean;
   symbolScale?: number;
   symbolStroke?: number;

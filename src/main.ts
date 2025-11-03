@@ -26,7 +26,7 @@ let settingsValues: PersistentConfig = {
   initialTime: persistedConfig.initialTime ?? 60,
   maxTimeBonus: persistedConfig.maxTimeBonus ?? 3,
   bonusWindow: persistedConfig.bonusWindow ?? 2.5,
-  ringRadiusFactor: persistedConfig.ringRadiusFactor ?? 0.18,
+  ringRadiusFactor: persistedConfig.ringRadiusFactor ?? 0.15,
   minTimeBonus: persistedConfig.minTimeBonus ?? 0.5,
   mechanicInterval: persistedConfig.mechanicInterval ?? 10,
   mechanicRandomize: persistedConfig.mechanicRandomize ?? false,
@@ -51,6 +51,26 @@ configStore.save(settingsValues);
 
 const game = new Game(canvas);
 game.refreshSettings(settingsValues);
+
+let settingsReturnState: GameState | null = null;
+
+function enterSettings(fromState: GameState) {
+  if (stateManager.getCurrentState() === GameState.SETTINGS) {
+    return;
+  }
+  settingsReturnState = fromState;
+  stateManager.showState(GameState.SETTINGS);
+}
+
+function exitSettings() {
+  if (stateManager.getCurrentState() !== GameState.SETTINGS) {
+    settingsReturnState = null;
+    return;
+  }
+  const nextState = settingsReturnState ?? GameState.MENU;
+  settingsReturnState = null;
+  stateManager.showState(nextState);
+}
 
 type SettingItem =
   | {
@@ -129,7 +149,7 @@ const SETTINGS_TABS: SettingsTab[] = [
         type: 'cycle',
         key: 'difficulty',
         label: 'Difficulty',
-        options: ['easy', 'medium', 'hard'],
+        options: ['easy', 'medium', 'hard', 'progressive'],
         format: (value) => value.charAt(0).toUpperCase() + value.slice(1)
       }
     ]
@@ -569,7 +589,7 @@ canvas.addEventListener('click', (ev) => {
       return;
     }
     if (settingsButtonRect && pointInRect(x, y, settingsButtonRect)) {
-      stateManager.showState(GameState.SETTINGS);
+      enterSettings(state);
       return;
     }
   } else if (state === GameState.SETTINGS) {
@@ -579,7 +599,7 @@ canvas.addEventListener('click', (ev) => {
       return;
     }
     if (backButtonRect && pointInRect(x, y, backButtonRect)) {
-      stateManager.showState(GameState.MENU);
+      exitSettings();
       return;
     }
   }
@@ -701,7 +721,7 @@ function handleSettingsKey(e: KeyboardEvent) {
       e.preventDefault();
       break;
     case 'Escape':
-      stateManager.showState(GameState.MENU);
+      exitSettings();
       e.preventDefault();
       break;
     default:
@@ -734,9 +754,9 @@ document.addEventListener('keydown', (e) => {
   const state = stateManager.getCurrentState();
   if (e.key === 'o' || e.key === 'O') {
     if (state === GameState.SETTINGS) {
-      stateManager.showState(GameState.MENU);
+      exitSettings();
     } else {
-      stateManager.showState(GameState.SETTINGS);
+      enterSettings(state);
     }
     e.preventDefault();
     return;

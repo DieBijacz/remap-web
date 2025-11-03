@@ -69,6 +69,17 @@ type ScoreTracer = {
   glow: number;
 };
 
+interface HudMetrics {
+  hudPad: number;
+  topY: number;
+  scoreFontSize: number;
+  labelFontSize: number;
+  valueFontSize: number;
+  labelOffset: number;
+  scoreBlockHeight: number;
+  scoreStripBottom: number;
+}
+
 const hexToRgb = (hex: string) => {
   const normalized = hex.replace('#', '');
   const value = normalized.length === 3
@@ -195,7 +206,7 @@ export class Game implements InputHandler {
     maxTimeBonus: 3,
     minTimeBonus: 0.5,
     bonusWindow: 2.5,
-    ringRadiusFactor: 0.18,
+    ringRadiusFactor: 0.15,
     symbolScale: 1,
     symbolStroke: 1
   };
@@ -208,7 +219,7 @@ export class Game implements InputHandler {
     maxTimeBonus: 3,
     minTimeBonus: 0.5,
     bonusWindow: 2.5,
-    ringRadiusFactor: 0.18,
+    ringRadiusFactor: 0.15,
     symbolScale: 1,
     symbolStroke: 1
   };
@@ -224,6 +235,8 @@ export class Game implements InputHandler {
   private centerScale = BASE_CENTER_SCALE;
   private symbolStrokeScale = 1;
   private centerOpacity = 1;
+  private playfieldCenter = { x: 0, y: 0 };
+  private lastRingCenter = { x: 0, y: 0 };
   private promptSpawnTime = 0;
   private isGameOver = false;
   private configStore: ConfigStore | null = null;
@@ -231,7 +244,7 @@ export class Game implements InputHandler {
   private currentMechanicBlock = 0;
   private mechanicInterval = MECHANIC_INTERVAL;
   private mechanicRandomize = false;
-  private difficulty: 'easy' | 'medium' | 'hard' = 'medium';
+  private difficulty: 'easy' | 'medium' | 'hard' | 'progressive' = 'medium';
   private mechanicSlots = 1;
   private activeMechanics: MechanicType[] = [];
   private mechanicBannerText: string | null = null;
@@ -616,6 +629,10 @@ export class Game implements InputHandler {
     }
     const newBlock = Math.floor(this.correctAnswers / this.mechanicInterval);
     const enabledMechanics = this.getEnabledMechanicPool();
+    if (this.difficulty === 'progressive') {
+      this.applyProgressiveMechanics(newBlock, enabledMechanics);
+      return;
+    }
     const slots = Math.min(this.mechanicSlots, enabledMechanics.length);
 
     if (newBlock !== this.currentMechanicBlock) {
@@ -641,6 +658,63 @@ export class Game implements InputHandler {
         this.refreshActiveMechanics();
       }
     }
+  }
+
+  // Applies the staged mechanic ramp for progressive difficulty.
+  private applyProgressiveMechanics(block: number, enabledMechanics: MechanicType[]) {
+    const targetCount = this.getProgressiveMechanicCount(block, enabledMechanics.length);
+
+    if (block !== this.currentMechanicBlock) {
+      this.currentMechanicBlock = block;
+      if (targetCount <= 0) {
+        this.setActiveMechanics([]);
+        this.lastMechanicSet = [];
+        return;
+      }
+      const next = this.pickRandomMechanicSet(enabledMechanics, targetCount);
+      this.setActiveMechanics(next);
+      this.lastMechanicSet = next;
+      return;
+    }
+
+    if (targetCount <= 0) {
+      if (this.activeMechanics.length > 0) {
+        this.setActiveMechanics([]);
+        this.lastMechanicSet = [];
+      }
+      return;
+    }
+
+    const cappedCount = Math.min(targetCount, enabledMechanics.length);
+    const currentCount = this.activeMechanics.length;
+    const needsRefresh =
+      currentCount !== cappedCount ||
+      !this.activeMechanics.every((mechanic) => enabledMechanics.includes(mechanic));
+
+    if (needsRefresh) {
+      const next = this.pickRandomMechanicSet(enabledMechanics, cappedCount);
+      this.setActiveMechanics(next);
+      this.lastMechanicSet = next;
+    } else {
+      this.refreshActiveMechanics();
+    }
+  }
+
+  // Progressive difficulty unlocks mechanics in expanding blocks of correct answers.
+  private getProgressiveMechanicCount(block: number, available: number) {
+    if (available <= 0) {
+      return 0;
+    }
+    if (block <= 0) {
+      return 0;
+    }
+    if (block <= 4) {
+      return Math.min(1, available);
+    }
+    if (block <= 8) {
+      return Math.min(2, available);
+    }
+    return Math.min(4, available);
   }
 
   private reapplyActiveMechanicLayout() {
@@ -673,7 +747,14 @@ export class Game implements InputHandler {
   }
 
   private getCanvasCenter() {
-    return { x: this.renderer.w / 2, y: this.renderer.h / 2 };
+    const { w, h } = this.renderer;
+    const radius = this.getRingRadius();
+    const targetY = Math.round(h * 0.62);
+    const topMargin = Math.max(radius + 100, h * 0.22);
+    const bottomMargin = Math.max(radius + 90, h * 0.24);
+    const centerY = clamp(targetY, topMargin, h - bottomMargin);
+    this.playfieldCenter = { x: w / 2, y: centerY };
+    return this.playfieldCenter;
   }
 
   private getScoreAnchor() {
@@ -743,20 +824,40 @@ export class Game implements InputHandler {
     }
 
     const difficultySetting = typeof data.difficulty === 'string' ? data.difficulty : this.difficulty;
-    this.difficulty = difficultySetting === 'easy' || difficultySetting === 'hard' ? difficultySetting : 'medium';
-    this.mechanicSlots = this.difficulty === 'easy' ? 1 : this.difficulty === 'hard' ? 3 : 2;
+    const previousDifficulty = this.difficulty;
+    if (
+      difficultySetting === 'easy' ||
+      difficultySetting === 'medium' ||
+      difficultySetting === 'hard' ||
+      difficultySetting === 'progressive'
+    ) {
+      this.difficulty = difficultySetting;
+    } else {
+      this.difficulty = 'medium';
+    }
+    const difficultyChanged = this.difficulty !== previousDifficulty;
+    this.mechanicSlots =
+      this.difficulty === 'easy'
+        ? 1
+        : this.difficulty === 'hard'
+          ? 3
+          : this.difficulty === 'progressive'
+            ? 1
+            : 2;
 
     const rawInterval = typeof data.mechanicInterval === 'number' ? data.mechanicInterval : this.mechanicInterval;
     const clampedInterval = Math.max(1, Math.round(clamp(rawInterval, 1, 60)));
-    const randomize = Boolean(data.mechanicRandomize ?? false);
+    const randomize = this.difficulty === 'progressive'
+      ? true
+      : Boolean(data.mechanicRandomize ?? false);
     const intervalChanged = clampedInterval !== this.mechanicInterval;
     const randomChanged = randomize !== this.mechanicRandomize;
 
     this.mechanicInterval = clampedInterval;
     this.mechanicRandomize = randomize;
 
-    if (intervalChanged || randomChanged) {
-      if (!this.mechanicRandomize) {
+    if (intervalChanged || randomChanged || difficultyChanged) {
+      if (!this.mechanicRandomize || difficultyChanged) {
         this.lastMechanicSet = [];
       }
       this.updateMechanicsAfterCorrect();
@@ -814,21 +915,26 @@ export class Game implements InputHandler {
     return Math.round(this.renderer.w * this.config.ringRadiusFactor);
   }
 
-  private computeRingPositions(offset = this.ringRotationOffset) {
-    const { w, h } = this.renderer;
+  private computeRingPositions(offset = this.ringRotationOffset, anchor?: { x: number; y: number }) {
     const radius = this.getRingRadius();
-    const center = { x: w / 2, y: h / 2 };
+    const target = anchor ?? ((this.playfieldCenter.x !== 0 || this.playfieldCenter.y !== 0)
+      ? this.playfieldCenter
+      : this.getCanvasCenter());
     return RING_BASE_ANGLES.map((base) => {
       const angle = base + offset;
       return {
-        x: center.x + radius * Math.cos(angle),
-        y: center.y + radius * Math.sin(angle)
+        x: target.x + radius * Math.cos(angle),
+        y: target.y + radius * Math.sin(angle)
       };
     });
   }
 
   private updateRingLayout() {
-    const positions = this.computeRingPositions();
+    if (!this.symbols.length) return;
+    const anchor = (this.playfieldCenter.x !== 0 || this.playfieldCenter.y !== 0)
+      ? this.playfieldCenter
+      : this.getCanvasCenter();
+    const positions = this.computeRingPositions(this.ringRotationOffset, anchor);
     positions.forEach((pos, index) => {
       const symbol = this.symbols[index];
       if (symbol) {
@@ -838,6 +944,11 @@ export class Game implements InputHandler {
         symbol.rotation = this.ringRotationOffset;
       }
     });
+    this.lastRingCenter = { x: anchor.x, y: anchor.y };
+    if (!this.anim.isActive()) {
+      this.centerPos.x = anchor.x;
+      this.centerPos.y = anchor.y;
+    }
   }
 
   private drawRingBackdrop(ctx: CanvasRenderingContext2D) {
@@ -850,7 +961,9 @@ export class Game implements InputHandler {
     if (active.length === 0) {
       return;
     }
-    const center = this.getCanvasCenter();
+    const center = this.playfieldCenter.x || this.playfieldCenter.y
+      ? this.playfieldCenter
+      : this.getCanvasCenter();
     const baseRadius = this.getRingRadius();
     active.forEach((type) => {
       const styles = MECHANIC_RING_STYLES[type] ?? [];
@@ -1321,6 +1434,14 @@ export class Game implements InputHandler {
   private draw() {
     const r = this.renderer;
     r.clear('#0d1117');
+    const anchor = this.getCanvasCenter();
+    if (anchor.x !== this.lastRingCenter.x || anchor.y !== this.lastRingCenter.y) {
+      this.updateRingLayout();
+    }
+    if (!this.anim.isActive()) {
+      this.centerPos.x = anchor.x;
+      this.centerPos.y = anchor.y;
+    }
     this.drawRingBackdrop(r.ctx);
     this.drawMechanicRings(r.ctx);
 
@@ -1359,11 +1480,26 @@ export class Game implements InputHandler {
     drawSymbol(r.ctx, centerSym, true, this.symbolStrokeScale);
     r.ctx.restore();
 
-    // Draw HUD (streak, score, highscore)
-    r.ctx.save();
-    const scoreFontSize = Math.max(24, Math.round(r.h * 0.08));
+    const hudMetrics = this.drawScoreboard(r.ctx);
+    this.drawMechanicBanner(r.ctx, hudMetrics);
+    this.drawTimeBar(r.ctx);
+
+    this.lastRingCenter = anchor;
+  }
+
+  private drawScoreboard(ctx: CanvasRenderingContext2D): HudMetrics {
+    const r = this.renderer;
+    ctx.save();
+
     const hudPad = Math.round(Math.max(8, r.h * 0.02));
-    const topY = Math.round(hudPad);
+    const scoreFontSize = Math.max(24, Math.round(r.h * 0.07));
+    const stripTop = Math.max(0, Math.round(hudPad * 0.12));
+    const stripPadding = Math.round(hudPad * 0.5);
+    const labelFontSize = Math.max(10, Math.round(scoreFontSize * 0.26));
+    const valueFontSize = Math.max(14, Math.round(scoreFontSize * 0.44));
+    const labelOffset = Math.max(2, Math.round(r.h * 0.004));
+    const scoreBlockHeight = Math.max(scoreFontSize, labelFontSize + labelOffset + valueFontSize);
+    const topY = stripTop + stripPadding;
     const hudCenterX = Math.round(r.w / 2);
     const scoreCenterY = topY + scoreFontSize / 2;
     const scorePulseRatio = Math.min(1, Math.max(0, this.scorePulseTimer / SCORE_PULSE_DURATION));
@@ -1372,173 +1508,243 @@ export class Game implements InputHandler {
     const scoreGlow = 0;
     const scoreGlowColor = 'rgba(0, 0, 0, 0)';
 
-    this.drawScoreTracers(r.ctx);
+    const scoreStripBottom = topY + scoreBlockHeight + stripPadding;
+    const stripHeight = scoreStripBottom - stripTop;
+    ctx.fillStyle = 'rgba(8, 12, 20, 0.82)';
+    ctx.fillRect(0, stripTop, r.w, stripHeight);
+    const separatorHeight = Math.max(1, Math.round(r.h * 0.002));
+    ctx.fillStyle = 'rgba(121, 192, 255, 0.28)';
+    ctx.fillRect(hudPad, scoreStripBottom - Math.max(1, separatorHeight), r.w - hudPad * 2, separatorHeight);
 
-    r.ctx.save();
-    r.ctx.textBaseline = 'top';
-    r.ctx.textAlign = 'center';
-    r.ctx.translate(hudCenterX, scoreCenterY);
-    r.ctx.scale(scoreScale, scoreScale);
-    r.ctx.translate(-hudCenterX, -scoreCenterY);
-    r.ctx.font = `${scoreFontSize}px Orbitron, sans-serif`;
-    r.ctx.fillStyle = '#ffffff';
-    r.ctx.shadowColor = scoreGlowColor;
-    r.ctx.shadowBlur = scoreGlow;
-    r.ctx.fillText(`${this.score}`, hudCenterX, topY);
-    r.ctx.restore();
-    r.ctx.shadowBlur = 3;
-    r.ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    this.drawScoreTracers(ctx);
+    ctx.save();
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'center';
+    ctx.translate(hudCenterX, scoreCenterY);
+    ctx.scale(scoreScale, scoreScale);
+    ctx.translate(-hudCenterX, -scoreCenterY);
+    ctx.font = `${scoreFontSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowColor = scoreGlowColor;
+    ctx.shadowBlur = scoreGlow;
+    ctx.fillText(`${this.score}`, hudCenterX, topY);
+    ctx.restore();
+    ctx.shadowBlur = 3;
+    ctx.shadowColor = 'rgba(0,0,0,0.6)';
 
-    // Side HUD entries
-    const labelFontSize = Math.max(10, Math.round(scoreFontSize * 0.26));
-    const valueFontSize = Math.max(14, Math.round(scoreFontSize * 0.44));
-    const labelOffset = Math.max(2, Math.round(r.h * 0.004));
-    r.ctx.textBaseline = 'top';
+    ctx.textBaseline = 'top';
 
-    // Streak (left)
-    r.ctx.textAlign = 'left';
-    r.ctx.font = `${labelFontSize}px Orbitron, sans-serif`;
-    r.ctx.fillStyle = 'rgba(126, 231, 135, 0.7)';
-    r.ctx.fillText('Streak', hudPad, topY);
-    r.ctx.font = `${valueFontSize}px Orbitron, sans-serif`;
-    r.ctx.fillStyle = '#7ee787';
-    r.ctx.fillText(`${this.streak}`, hudPad, topY + labelFontSize + labelOffset);
+    ctx.textAlign = 'left';
+    ctx.font = `${labelFontSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = 'rgba(126, 231, 135, 0.7)';
+    ctx.fillText('Streak', hudPad, topY);
+    ctx.font = `${valueFontSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#7ee787';
+    ctx.fillText(`${this.streak}`, hudPad, topY + labelFontSize + labelOffset);
 
-    // Highscore (right)
-    r.ctx.textAlign = 'right';
-    r.ctx.font = `${labelFontSize}px Orbitron, sans-serif`;
-    r.ctx.fillStyle = 'rgba(121, 192, 255, 0.7)';
-    r.ctx.fillText('Best', r.w - hudPad, topY);
-    r.ctx.font = `${valueFontSize}px Orbitron, sans-serif`;
-    r.ctx.fillStyle = '#79c0ff';
-    r.ctx.fillText(`${this.highscore}`, r.w - hudPad, topY + labelFontSize + labelOffset);
-    r.ctx.restore();
+    ctx.textAlign = 'right';
+    ctx.font = `${labelFontSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = 'rgba(121, 192, 255, 0.7)';
+    ctx.fillText('Best', r.w - hudPad, topY);
+    ctx.font = `${valueFontSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#79c0ff';
+    ctx.fillText(`${this.highscore}`, r.w - hudPad, topY + labelFontSize + labelOffset);
 
+    ctx.restore();
+
+    return {
+      hudPad,
+      topY,
+      scoreFontSize,
+      labelFontSize,
+      valueFontSize,
+      labelOffset,
+      scoreBlockHeight,
+      scoreStripBottom
+    };
+  }
+
+  private drawMechanicBanner(ctx: CanvasRenderingContext2D, metrics: HudMetrics) {
+    const r = this.renderer;
     const showRemapMapping = this.activeMechanics.includes('remap') && this.remapMapping;
     const bannerText = this.mechanicBannerText ? this.mechanicBannerText.trim() : '';
-    if (showRemapMapping || bannerText) {
-      const center = this.getCanvasCenter();
-      const radius = this.getRingRadius();
-      const scaleFactor = this.ringSymbolScale / BASE_RING_SYMBOL_SCALE;
-      const rowScale = clamp(r.h * 0.0013, 0.52, 0.78) * scaleFactor;
-      const symbolSize = 46 * rowScale;
-      const spacing = Math.max(symbolSize * 0.32, 18);
-      const arrowWidth = Math.max(symbolSize * 1.35, 54);
-      const arrowThickness = Math.max(symbolSize * 0.26, 9);
-      const arrowHead = arrowWidth * 0.24;
-      const arrowHeadHeight = arrowThickness * 1.35;
-      const totalWidth = symbolSize * 2 + arrowWidth + spacing * 2;
-      const startX = (r.w - totalWidth) / 2;
-      const scoreBlockHeight = Math.max(scoreFontSize, labelFontSize + labelOffset + valueFontSize);
-      const scoreboardBottom = topY + scoreBlockHeight;
-      const ringTop = center.y - radius;
-      let mapY = scoreboardBottom + Math.max(16, (ringTop - scoreboardBottom) * 0.45);
-      mapY = Math.min(mapY, ringTop - Math.max(symbolSize * 0.6, 28));
-      mapY = Math.max(mapY, scoreboardBottom + symbolSize * 0.6);
-
-      if (showRemapMapping && this.remapMapping) {
-        let cursor = startX;
-        const leftX = cursor + symbolSize / 2;
-        cursor += symbolSize + spacing;
-        const arrowX = cursor + arrowWidth / 2;
-        cursor += arrowWidth + spacing;
-        const rightX = cursor + symbolSize / 2;
-
-        const leftSymbol: Symbol = { type: this.remapMapping.from, x: leftX, y: mapY, scale: rowScale, rotation: 0 };
-        const rightSymbol: Symbol = { type: this.remapMapping.to, x: rightX, y: mapY, scale: rowScale, rotation: 0 };
-        const bannerStroke = Math.max(0.4, this.symbolStrokeScale * 0.85);
-        drawSymbol(r.ctx, leftSymbol, true, bannerStroke);
-        drawSymbol(r.ctx, rightSymbol, true, bannerStroke);
-
-        r.ctx.save();
-        r.ctx.translate(arrowX, mapY);
-        r.ctx.beginPath();
-        const halfThickness = arrowThickness / 2;
-        const bodyLength = arrowWidth - arrowHead;
-        const bodyStart = -arrowWidth / 2;
-        const bodyEnd = bodyStart + bodyLength;
-        r.ctx.moveTo(bodyStart, -halfThickness);
-        r.ctx.lineTo(bodyEnd, -halfThickness);
-        r.ctx.lineTo(bodyEnd, -arrowHeadHeight);
-        r.ctx.lineTo(arrowWidth / 2, 0);
-        r.ctx.lineTo(bodyEnd, arrowHeadHeight);
-        r.ctx.lineTo(bodyEnd, halfThickness);
-        r.ctx.lineTo(bodyStart, halfThickness);
-        r.ctx.closePath();
-        const arrowColor = MECHANIC_COLORS.remap;
-        r.ctx.fillStyle = arrowColor;
-        r.ctx.globalAlpha = 0.92;
-        r.ctx.shadowColor = arrowColor;
-        r.ctx.shadowBlur = 14;
-        r.ctx.fill();
-        r.ctx.restore();
-      }
-      if (bannerText) {
-        r.ctx.save();
-        r.ctx.font = `${Math.max(18, Math.round(r.h * 0.05))}px Orbitron, sans-serif`;
-        r.ctx.textAlign = 'center';
-        r.ctx.textBaseline = 'middle';
-        const textY = showRemapMapping ? mapY + symbolSize : mapY;
-        r.ctx.fillStyle = colorWithAlpha('#9da7b3', 0.95);
-        r.ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-        r.ctx.shadowBlur = 10;
-        r.ctx.fillText(bannerText, r.w / 2, textY);
-        r.ctx.restore();
-      }
+    if (!showRemapMapping && !bannerText) {
+      return;
     }
 
-    // Draw time bar
+    const { scoreStripBottom } = metrics;
+    const center = (this.playfieldCenter.x !== 0 || this.playfieldCenter.y !== 0)
+      ? this.playfieldCenter
+      : this.getCanvasCenter();
+    const radius = this.getRingRadius();
+    const scaleFactor = this.ringSymbolScale / BASE_RING_SYMBOL_SCALE;
+    const rowScale = clamp(r.h * 0.0013, 0.52, 0.78) * scaleFactor;
+    const symbolSize = 46 * rowScale;
+    const spacing = Math.max(symbolSize * 0.32, 18);
+    const arrowWidth = Math.max(symbolSize * 1.35, 54);
+    const arrowThickness = Math.max(symbolSize * 0.26, 9);
+    const arrowHead = arrowWidth * 0.24;
+    const arrowHeadHeight = arrowThickness * 1.35;
+    const totalWidth = symbolSize * 2 + arrowWidth + spacing * 2;
+    const centerX = r.w / 2;
+    const ringTop = center.y - radius;
 
+    const textFontSize = Math.max(18, Math.round(r.h * 0.05));
+    ctx.save();
+    ctx.font = `${textFontSize}px Orbitron, sans-serif`;
+    const textWidth = bannerText ? ctx.measureText(bannerText).width : 0;
+    ctx.restore();
+
+    const mappingHeight = showRemapMapping ? symbolSize : 0;
+    const textHeight = bannerText ? textFontSize : 0;
+    const textSpacing = showRemapMapping && bannerText ? Math.max(symbolSize * 0.25, 16) : 0;
+    const contentWidth = Math.max(showRemapMapping ? totalWidth : 0, textWidth);
+    const contentHeight = mappingHeight + textSpacing + textHeight;
+
+    const boxPaddingX = Math.max(24, symbolSize * 0.4);
+    const boxPaddingY = Math.max(16, symbolSize * 0.3);
+    const boxWidth = contentWidth + boxPaddingX * 2;
+    const boxHeight = contentHeight + boxPaddingY * 2;
+
+    const desiredGap = Math.max(symbolSize * 0.55, 28);
+    let boxBottom = ringTop - desiredGap;
+    let boxTop = boxBottom - boxHeight;
+
+    const minTop = scoreStripBottom + Math.max(18, symbolSize * 0.3);
+    if (boxTop < minTop) {
+      boxTop = minTop;
+      boxBottom = boxTop + boxHeight;
+    }
+
+    const boxLeft = centerX - boxWidth / 2;
+    const innerTop = boxTop + boxPaddingY;
+    const cornerRadius = Math.min(boxHeight / 2, Math.max(16, symbolSize * 0.35));
+
+    const drawRoundedRect = (x: number, y: number, width: number, height: number, radius: number) => {
+      const rad = Math.min(radius, height / 2, width / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rad, y);
+      ctx.lineTo(x + width - rad, y);
+      ctx.quadraticCurveTo(x + width, y, x + width, y + rad);
+      ctx.lineTo(x + width, y + height - rad);
+      ctx.quadraticCurveTo(x + width, y + height, x + width - rad, y + height);
+      ctx.lineTo(x + rad, y + height);
+      ctx.quadraticCurveTo(x, y + height, x, y + height - rad);
+      ctx.lineTo(x, y + rad);
+      ctx.quadraticCurveTo(x, y, x + rad, y);
+      ctx.closePath();
+    };
+
+    ctx.save();
+    drawRoundedRect(boxLeft, boxTop, boxWidth, boxHeight, cornerRadius);
+    ctx.fillStyle = 'rgba(12, 17, 27, 0.82)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(121, 192, 255, 0.28)';
+    ctx.lineWidth = Math.max(1.2, symbolSize * 0.08);
+    ctx.stroke();
+    ctx.restore();
+
+    if (showRemapMapping && this.remapMapping) {
+      const mappingCenterY = innerTop + symbolSize / 2;
+      let cursor = centerX - totalWidth / 2;
+      const leftX = cursor + symbolSize / 2;
+      cursor += symbolSize + spacing;
+      const arrowX = cursor + arrowWidth / 2;
+      cursor += arrowWidth + spacing;
+      const rightX = cursor + symbolSize / 2;
+
+      const leftSymbol: Symbol = { type: this.remapMapping.from, x: leftX, y: mappingCenterY, scale: rowScale, rotation: 0 };
+      const rightSymbol: Symbol = { type: this.remapMapping.to, x: rightX, y: mappingCenterY, scale: rowScale, rotation: 0 };
+      const bannerStroke = Math.max(0.4, this.symbolStrokeScale * 0.85);
+      drawSymbol(ctx, leftSymbol, true, bannerStroke);
+      drawSymbol(ctx, rightSymbol, true, bannerStroke);
+
+      ctx.save();
+      ctx.translate(arrowX, mappingCenterY);
+      ctx.beginPath();
+      const halfThickness = arrowThickness / 2;
+      const bodyLength = arrowWidth - arrowHead;
+      const bodyStart = -arrowWidth / 2;
+      const bodyEnd = bodyStart + bodyLength;
+      ctx.moveTo(bodyStart, -halfThickness);
+      ctx.lineTo(bodyEnd, -halfThickness);
+      ctx.lineTo(bodyEnd, -arrowHeadHeight);
+      ctx.lineTo(arrowWidth / 2, 0);
+      ctx.lineTo(bodyEnd, arrowHeadHeight);
+      ctx.lineTo(bodyEnd, halfThickness);
+      ctx.lineTo(bodyStart, halfThickness);
+      ctx.closePath();
+      const arrowColor = MECHANIC_COLORS.remap;
+      ctx.fillStyle = arrowColor;
+      ctx.globalAlpha = 0.92;
+      ctx.shadowColor = arrowColor;
+      ctx.shadowBlur = 14;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (bannerText) {
+      const textY = innerTop + mappingHeight + (mappingHeight > 0 ? textSpacing : 0) + textFontSize / 2;
+      ctx.save();
+      ctx.font = `${textFontSize}px Orbitron, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = colorWithAlpha('#cdd9e5', 0.95);
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+      ctx.shadowBlur = 8;
+      ctx.fillText(bannerText, centerX, textY);
+      ctx.restore();
+    }
+  }
+
+  private drawTimeBar(ctx: CanvasRenderingContext2D) {
+    const r = this.renderer;
     const pad = Math.round(Math.max(12, r.h * 0.03));
     const barH = Math.max(6, Math.round(r.h * 0.012));
     const barW = r.w - pad * 2;
     const timeRatio = Math.max(0, Math.min(1, this.timer.get() / this.config.duration));
 
-    // timebar background
-    r.ctx.fillStyle = '#1f2632';
+    ctx.fillStyle = '#1f2632';
     const barY = r.h - pad - barH;
-    r.ctx.fillRect(pad, barY, barW, barH);
+    ctx.fillRect(pad, barY, barW, barH);
 
-    // timebar fill
-    r.ctx.fillStyle = timeRatio > 0.3 ? '#78c6ff' : '#ff4433';
-    r.ctx.fillRect(pad, barY, Math.round(barW * timeRatio), barH);
+    ctx.fillStyle = timeRatio > 0.3 ? '#78c6ff' : '#ff4433';
+    ctx.fillRect(pad, barY, Math.round(barW * timeRatio), barH);
 
-    // draw time number above the timebar, including the last delta if active
-    r.ctx.save();
+    ctx.save();
     const fontSize = Math.max(12, Math.round(r.h * 0.04));
-    r.ctx.font = `${fontSize}px Orbitron, sans-serif`;
-    r.ctx.textBaseline = 'bottom';
+    ctx.font = `${fontSize}px Orbitron, sans-serif`;
+    ctx.textBaseline = 'middle';
     const timeDisplay = Math.max(0, this.timer.get()).toFixed(1);
     const deltaActive = this.timeDeltaTimer > 0 && this.timeDeltaValue !== 0;
-    const displayY = barY - Math.max(4, Math.round(r.h * 0.01));
-    if (!deltaActive) {
-      r.ctx.fillStyle = '#ffffff';
-      r.ctx.textAlign = 'center';
-      r.ctx.fillText(timeDisplay, r.w / 2, displayY);
-    } else {
+    let deltaText = '';
+    if (deltaActive) {
       const delta = this.timeDeltaValue;
       const sign = delta > 0 ? '+' : '-';
       const magnitude = Math.abs(delta).toFixed(1).replace(/\.0$/, '');
-      const deltaText = `${sign} ${magnitude}`;
-      const spacing = Math.max(6, Math.round(r.h * 0.01));
-
-      r.ctx.textAlign = 'left';
-      const baseMetrics = r.ctx.measureText(timeDisplay);
-      const deltaMetrics = r.ctx.measureText(deltaText);
-      const totalWidth = baseMetrics.width + spacing + deltaMetrics.width;
-      const startX = r.w / 2 - totalWidth / 2;
-
-      r.ctx.fillStyle = '#ffffff';
-      r.ctx.fillText(timeDisplay, startX, displayY);
-
-      const fade = Math.max(0, Math.min(1, this.timeDeltaTimer / TIME_DELTA_DISPLAY_SEC));
-      r.ctx.globalAlpha = fade;
-      r.ctx.fillStyle = delta > 0 ? '#7ee787' : '#ff6f6f';
-      r.ctx.fillText(deltaText, startX + baseMetrics.width + spacing, displayY);
-      r.ctx.globalAlpha = 1;
+      deltaText = `${sign} ${magnitude}`;
     }
-    r.ctx.restore();
 
+    const centerX = r.w / 2;
+    const textY = barY + barH / 2;
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.lineWidth = Math.max(1, Math.round(fontSize * 0.12));
+    ctx.textAlign = 'center';
+    ctx.strokeText(timeDisplay, centerX, textY);
+    ctx.fillText(timeDisplay, centerX, textY);
+
+    if (deltaActive && deltaText) {
+      const fade = Math.max(0, Math.min(1, this.timeDeltaTimer / TIME_DELTA_DISPLAY_SEC));
+      const offsetY = Math.max(barH + fontSize * 0.25, Math.round(fontSize * 0.9));
+      ctx.save();
+      ctx.globalAlpha = fade;
+      ctx.fillStyle = this.timeDeltaValue > 0 ? '#7ee787' : '#ff6f6f';
+      ctx.strokeText(deltaText, centerX, textY - offsetY);
+      ctx.fillText(deltaText, centerX, textY - offsetY);
+      ctx.restore();
+    }
+    ctx.restore();
   }
 
   // Public API methods
