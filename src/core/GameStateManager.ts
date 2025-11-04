@@ -1,7 +1,8 @@
 export const GameState = {
   MENU: 'menu',
   GAME: 'game',
-  SETTINGS: 'settings'
+  SETTINGS: 'settings',
+  LEADERBOARD: 'leaderboard'
 } as const;
 
 export type GameState = typeof GameState[keyof typeof GameState];

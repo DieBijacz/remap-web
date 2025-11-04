@@ -11,7 +11,7 @@ import { ParticleSystem } from '../fx/ParticleSystem';
 import { AudioManager } from '../audio/AudioManager';
 import correctSfxUrl from '../audio/sfx/sfx_point.wav';
 import wrongSfxUrl from '../audio/sfx/sfx_wrong.wav';
-import HighscoreStore from '../storage/HighscoreStore';
+import HighscoreStore, { type HighscoreEntry } from '../storage/HighscoreStore';
 import ConfigStore from '../storage/ConfigStore';
 import type { Config as PersistentConfig } from '../storage/ConfigStore';
 
@@ -32,8 +32,17 @@ const SCORE_TRACER_DURATION = 0.55;
 const SCORE_TRACER_TRAIL = 0.22;
 const SCORE_TRACER_THICKNESS = 5;
 const SCORE_TRACER_COUNT = 3;
+const PROGRESSIVE_LEVEL_NOTICE_DURATION = 2.8;
 type Direction = 'up' | 'right' | 'down' | 'left';
 type MechanicType = 'none' | 'remap' | 'spin' | 'memory' | 'joystick';
+type NameEntryMode = 'slots' | 'keyboard';
+export type GameCompletionSummary = {
+  leaderboard: HighscoreEntry[];
+  finalScore: number;
+  placement: number | null;
+  didQualify: boolean;
+  playerName: string | null;
+};
 const MECHANIC_INTERVAL = 10;
 const MEMORY_PREVIEW_DURATION = 1.0;
 const RING_BASE_ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
@@ -44,6 +53,27 @@ const MECHANIC_COLORS: Record<MechanicType, string> = {
   memory: '#f87171',
   joystick: '#34d399'
 };
+const NAME_SLOT_COUNT = 10;
+const NAME_ALPHABET = [
+  ' ',
+  'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+  'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+  '-'
+];
+const NAME_KEYBOARD_ROWS: string[][] = [
+  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+  ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+  ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
+  ['Z', 'X', 'C', 'V', 'B', 'N', 'M', 'BACK'],
+  ['SPACE', 'OK']
+];
+const NAME_KEYBOARD_SPECIAL = {
+  BACK: 'BACK',
+  SPACE: 'SPACE',
+  OK: 'OK'
+} as const;
+const LEADERBOARD_MAX_ENTRIES = 10;
 
 type RingSegment = { start: number; end: number; };
 interface RingStyle {
@@ -78,6 +108,12 @@ interface HudMetrics {
   labelOffset: number;
   scoreBlockHeight: number;
   scoreStripBottom: number;
+}
+
+interface MechanicLevelUpNotice {
+  title: string;
+  body: string;
+  detail?: string;
 }
 
 const hexToRgb = (hex: string) => {
@@ -248,6 +284,10 @@ export class Game implements InputHandler {
   private mechanicSlots = 1;
   private activeMechanics: MechanicType[] = [];
   private mechanicBannerText: string | null = null;
+  private progressiveMechanicLimit = 0;
+  private mechanicLevelUpNotice: MechanicLevelUpNotice | null = null;
+  private mechanicLevelUpTimer = 0;
+  private mechanicLevelPauseActive = false;
   private remapMapping: { from: SymbolType; to: SymbolType } | null = null;
   private memoryRevealTimer = 0;
   private memorySymbolsHidden = false;
@@ -279,6 +319,20 @@ export class Game implements InputHandler {
     memory: 0,
     joystick: 0
   };
+  private leaderboard: HighscoreEntry[] = [];
+  private gamePhase: 'idle' | 'playing' | 'name-entry' | 'completed' = 'idle';
+  private nameEntryMode: NameEntryMode = 'slots';
+  private nameEntrySlots: string[] = Array(NAME_SLOT_COUNT).fill(' ');
+  private nameEntryCharIndices: number[] = Array(NAME_SLOT_COUNT).fill(0);
+  private nameEntryCursor = 0;
+  private nameInputBuffer = '';
+  private nameKeyboardRow = 0;
+  private nameKeyboardCol = 0;
+  private finalScore = 0;
+  private finalPlacement: number | null = null;
+  private pendingPlacement: number | null = null;
+  private finalName: string | null = null;
+  private completionListeners: Array<(summary: GameCompletionSummary) => void> = [];
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new Renderer2D(canvas);
@@ -299,6 +353,20 @@ export class Game implements InputHandler {
 
     // Load audio
     this.loadAudio();
+  }
+
+  onGameComplete(listener: (summary: GameCompletionSummary) => void) {
+    this.completionListeners.push(listener);
+  }
+
+  private emitGameComplete(summary: GameCompletionSummary) {
+    this.completionListeners.forEach((listener) => {
+      try {
+        listener(summary);
+      } catch (err) {
+        console.error('[debug] game completion listener error', err);
+      }
+    });
   }
 
   private async loadAudio() {
@@ -519,6 +587,55 @@ export class Game implements InputHandler {
     this.updateMechanicBannerText();
   }
 
+  private restartMemoryPreview(opts?: { shuffle?: boolean }) {
+    this.memorySymbolsHidden = false;
+    this.memoryRevealTimer = this.memoryPreviewDuration;
+    if (opts?.shuffle !== false) {
+      this.applySpinShuffle();
+    }
+    this.ensureMemoryMessage();
+  }
+
+  private startProgressiveLevelAnnouncement(block: number, mechanicCount: number) {
+    const tier = Math.max(1, block);
+    const increase = mechanicCount - this.progressiveMechanicLimit;
+    const clampedCount = Math.max(0, mechanicCount);
+    const plural = clampedCount === 1 ? 'mechanic' : 'mechanics';
+    const body =
+      clampedCount <= 0
+        ? 'Mechanics are currently disabled.'
+        : clampedCount === 1 && this.progressiveMechanicLimit === 0
+          ? 'Mechanics are now entering the rotation.'
+          : increase > 1
+            ? `Mechanic slots jumped to ${clampedCount} ${plural}.`
+            : `Up to ${clampedCount} ${plural} can be active at once.`;
+    const detailBase =
+      clampedCount <= 1
+        ? 'Gear up: challenges escalate from here.'
+        : increase > 1
+          ? 'Multiple mechanic slots unlocked at once.'
+          : 'Prepare for overlapping mechanics.';
+    this.mechanicLevelUpNotice = {
+      title: `Progressive Tier ${tier}`,
+      body,
+      detail: `${detailBase} Game resumes shortly...`
+    };
+    this.mechanicLevelUpTimer = PROGRESSIVE_LEVEL_NOTICE_DURATION;
+    if (!this.mechanicLevelPauseActive) {
+      this.pauseLayer();
+      this.mechanicLevelPauseActive = true;
+    }
+  }
+
+  private clearProgressiveLevelAnnouncement() {
+    if (this.mechanicLevelPauseActive) {
+      this.resumeLayer();
+      this.mechanicLevelPauseActive = false;
+    }
+    this.mechanicLevelUpNotice = null;
+    this.mechanicLevelUpTimer = 0;
+  }
+
   private triggerMechanicFlash(type: MechanicType) {
     if (type === 'none') return;
     const color = MECHANIC_COLORS[type] ?? MECHANIC_COLORS.none;
@@ -535,9 +652,7 @@ export class Game implements InputHandler {
         this.applySpinShuffle();
         break;
       case 'memory':
-        this.memorySymbolsHidden = false;
-        this.memoryRevealTimer = this.memoryPreviewDuration;
-        this.applySpinShuffle();
+        this.restartMemoryPreview();
         break;
       case 'joystick':
         this.joystickInverted = true;
@@ -612,7 +727,7 @@ export class Game implements InputHandler {
         this.applySpinShuffle();
         break;
       case 'memory':
-        this.ensureMemoryMessage();
+        this.restartMemoryPreview({ shuffle: !this.activeMechanics.includes('spin') });
         break;
       default:
         break;
@@ -662,7 +777,12 @@ export class Game implements InputHandler {
 
   // Applies the staged mechanic ramp for progressive difficulty.
   private applyProgressiveMechanics(block: number, enabledMechanics: MechanicType[]) {
-    const targetCount = this.getProgressiveMechanicCount(block, enabledMechanics.length);
+    const targetCountRaw = this.getProgressiveMechanicCount(block, enabledMechanics.length);
+    const targetCount = Math.max(0, Math.min(targetCountRaw, enabledMechanics.length));
+    if (targetCount > this.progressiveMechanicLimit) {
+      this.startProgressiveLevelAnnouncement(block, targetCount);
+    }
+    this.progressiveMechanicLimit = targetCount;
 
     if (block !== this.currentMechanicBlock) {
       this.currentMechanicBlock = block;
@@ -726,7 +846,7 @@ export class Game implements InputHandler {
       this.memorySymbolsHidden = false;
       this.memoryRevealTimer = 0;
     } else {
-      this.ensureMemoryMessage();
+      this.restartMemoryPreview({ shuffle: false });
     }
     if (!this.activeMechanics.includes('joystick')) {
       this.joystickInverted = false;
@@ -770,14 +890,40 @@ export class Game implements InputHandler {
   private syncHighscore() {
     if (!this.highscoreStore) return;
     const list = this.highscoreStore.list();
-    this.highscore = list.length > 0 ? list[0] : Math.max(this.highscore, 0);
+    this.leaderboard = list;
+    this.highscore = list.length > 0 ? list[0].score : Math.max(this.highscore, 0);
   }
 
-  private recordScore() {
-    if (!this.highscoreStore) return;
-    this.highscoreStore.save(this.score);
-    const list = this.highscoreStore.list();
-    this.highscore = list.length > 0 ? list[0] : Math.max(this.highscore, this.score);
+  getLeaderboardSnapshot(): HighscoreEntry[] {
+    return this.leaderboard.map((entry) => ({ ...entry }));
+  }
+
+  private recordScore(entry: HighscoreEntry): number {
+    if (!this.highscoreStore) return Number.POSITIVE_INFINITY;
+    const placement = this.highscoreStore.save(entry);
+    this.leaderboard = this.highscoreStore.list();
+    this.highscore =
+      this.leaderboard.length > 0
+        ? this.leaderboard[0].score
+        : Math.max(this.highscore, entry.score);
+    return placement;
+  }
+
+  private sanitizePlayerName(name: string) {
+    const normalized = (name ?? '').toString().toUpperCase();
+    const filtered = normalized.replace(/[^A-Z0-9 ]+/g, '');
+    const trimmed = filtered.trim();
+    const truncated = trimmed.slice(0, NAME_SLOT_COUNT);
+    return truncated.length > 0 ? truncated : 'PLAYER';
+  }
+
+  private updateSlotsFromBuffer(buffer: string) {
+    const normalized = buffer.slice(0, NAME_SLOT_COUNT);
+    const slots = Array(NAME_SLOT_COUNT).fill(' ');
+    for (let i = 0; i < normalized.length; i += 1) {
+      slots[i] = normalized[i];
+    }
+    this.nameEntrySlots = slots;
   }
 
   resetHighscore() {
@@ -792,6 +938,10 @@ export class Game implements InputHandler {
 
   refreshSettings(config?: PersistentConfig) {
     const data = config ?? this.configStore?.load() ?? {};
+    const legacyConfig = data as PersistentConfig & {
+      particlesEnabled?: boolean;
+      scoreRayEnabled?: boolean;
+    };
     const merged: GameConfig = {
       ...this.defaults,
       duration: clamp(data.initialTime ?? this.defaults.duration, 15, 300),
@@ -836,6 +986,10 @@ export class Game implements InputHandler {
       this.difficulty = 'medium';
     }
     const difficultyChanged = this.difficulty !== previousDifficulty;
+    if (this.difficulty !== 'progressive') {
+      this.progressiveMechanicLimit = 0;
+      this.clearProgressiveLevelAnnouncement();
+    }
     this.mechanicSlots =
       this.difficulty === 'easy'
         ? 1
@@ -869,9 +1023,10 @@ export class Game implements InputHandler {
 
     const particleSetting = typeof data.particlesPerScore === 'number' ? data.particlesPerScore : this.particleDensity;
     this.particleDensity = clamp(particleSetting, 0, 20);
-    const particlesEnabledSetting = data.particlesEnabled;
-    const particlesActive = particlesEnabledSetting !== false && this.particleDensity > 0;
-    this.particlesEnabled = particlesActive;
+    if (legacyConfig.particlesEnabled === false) {
+      this.particleDensity = 0;
+    }
+    this.particlesEnabled = this.particleDensity > 0;
     const particlesPersistSetting = data.particlesPersist;
     this.particlesPersist = Boolean(particlesPersistSetting);
     this.particles.setDespawnEnabled(!this.particlesPersist);
@@ -881,9 +1036,10 @@ export class Game implements InputHandler {
 
     const tracerCountSetting = typeof data.scoreRayCount === 'number' ? data.scoreRayCount : this.scoreTracerCountSetting;
     this.scoreTracerCountSetting = clamp(tracerCountSetting, 0, 12);
-    const tracerEnabledSetting = data.scoreRayEnabled;
-    const scoreTracerActive = tracerEnabledSetting !== false && this.scoreTracerCountSetting > 0;
-    this.scoreTracerEnabled = scoreTracerActive;
+    if (legacyConfig.scoreRayEnabled === false) {
+      this.scoreTracerCountSetting = 0;
+    }
+    this.scoreTracerEnabled = this.scoreTracerCountSetting > 0;
     const tracerThicknessSetting = typeof data.scoreRayThickness === 'number' ? data.scoreRayThickness : this.scoreTracerThickness;
     this.scoreTracerThickness = clamp(tracerThicknessSetting, 0.2, 3);
     const tracerIntensitySetting = typeof data.scoreRayIntensity === 'number' ? data.scoreRayIntensity : this.scoreTracerIntensity;
@@ -891,6 +1047,10 @@ export class Game implements InputHandler {
     if (!this.scoreTracerEnabled) {
       this.scoreTracers = [];
     }
+
+    const nameEntryModeSetting =
+      data.nameEntryMode === 'keyboard' ? 'keyboard' : 'slots';
+    this.nameEntryMode = nameEntryModeSetting;
 
     const nextMechanicEnabled: typeof this.mechanicEnabled = {
       remap: data.mechanicEnableRemap !== false,
@@ -1075,7 +1235,24 @@ export class Game implements InputHandler {
   }
 
   onKeyDown(e: KeyboardEvent) {
-    if (this.isGameOver) return;
+    if (this.gamePhase === 'name-entry') {
+      if (this.nameEntryMode === 'keyboard') {
+        this.handleKeyboardNameEntryInput(e);
+      } else {
+        this.handleSlotNameEntryInput(e);
+      }
+      return;
+    }
+    if (this.gamePhase !== 'playing') {
+      if (['ArrowUp', 'ArrowRight', 'ArrowDown', 'ArrowLeft', 'Enter'].includes(e.key)) {
+        e.preventDefault();
+      }
+      return;
+    }
+    if (this.mechanicLevelUpNotice) {
+      e.preventDefault();
+      return;
+    }
     if (this.anim.isActive()) return; // ignore input during animations
 
     console.log('[debug] Game.onKeyDown', e.key);
@@ -1089,10 +1266,22 @@ export class Game implements InputHandler {
     // Map arrow keys to directions
     let inputDir: Direction | null = null;
     switch (e.key) {
-      case 'ArrowUp': inputDir = 'up'; break;
-      case 'ArrowRight': inputDir = 'right'; break;
-      case 'ArrowDown': inputDir = 'down'; break;
-      case 'ArrowLeft': inputDir = 'left'; break;
+      case 'ArrowUp':
+        inputDir = 'up';
+        e.preventDefault();
+        break;
+      case 'ArrowRight':
+        inputDir = 'right';
+        e.preventDefault();
+        break;
+      case 'ArrowDown':
+        inputDir = 'down';
+        e.preventDefault();
+        break;
+      case 'ArrowLeft':
+        inputDir = 'left';
+        e.preventDefault();
+        break;
     }
 
     if (inputDir !== null) {
@@ -1340,12 +1529,27 @@ export class Game implements InputHandler {
     if (this.configStore) {
       this.refreshSettings();
     }
+    this.input.addHandler(this);
+    this.clock.stop();
+    this.gamePhase = 'playing';
     this.isGameOver = false;
+    this.pendingPlacement = null;
+    this.finalPlacement = null;
+    this.finalName = null;
+    this.finalScore = 0;
+    this.nameEntrySlots = Array(NAME_SLOT_COUNT).fill(' ');
+    this.nameEntryCharIndices = Array(NAME_SLOT_COUNT).fill(0);
+    this.nameEntryCursor = 0;
+    this.nameInputBuffer = '';
+    this.nameKeyboardRow = 0;
+    this.nameKeyboardCol = 0;
+    this.clearProgressiveLevelAnnouncement();
     this.score = 0;
     this.streak = 0;
     this.timeDeltaValue = 0;
     this.timeDeltaTimer = 0;
     this.correctAnswers = 0;
+    this.progressiveMechanicLimit = 0;
     this.currentMechanicBlock = 0;
     this.activeMechanics = [];
     this.lastMechanicSet = [];
@@ -1374,9 +1578,22 @@ export class Game implements InputHandler {
   }
 
   private update(dt: number) {
-    if (this.isGameOver) return;
+    if (this.mechanicLevelUpNotice) {
+      if (this.mechanicLevelUpTimer > 0) {
+        this.mechanicLevelUpTimer = Math.max(0, this.mechanicLevelUpTimer - dt);
+      }
+      if (this.mechanicLevelUpTimer <= 0) {
+        this.clearProgressiveLevelAnnouncement();
+      }
+      this.draw();
+      return;
+    }
 
-    // Update global time and timer
+    if (this.isGameOver || this.gamePhase !== 'playing') {
+      this.draw();
+      return;
+    }
+
     this.time.tick(dt);
     this.timer.tick(dt);
     this.effects.update(dt);
@@ -1411,24 +1628,196 @@ export class Game implements InputHandler {
     this.updateMechanicRings(dt);
     this.updateSpinAnimation(dt);
 
-    // get current remaining time as float (used for game over check)
     const timeLeftFloat = this.timer.get();
-
-    // Check for game over
     if (timeLeftFloat <= 0) {
-      this.isGameOver = true;
-      this.input.removeHandler(this);
-      this.audio.play('gameover');
-      this.recordScore();
-      alert(`Game Over! Final score: ${this.score}`);
+      this.beginGameOver();
+      this.draw();
       return;
     }
 
-    // Update animations
     this.anim.tick(dt);
-
-    // Draw frame
     this.draw();
+  }
+
+  private beginGameOver() {
+    if (this.isGameOver) return;
+    this.isGameOver = true;
+    this.clearProgressiveLevelAnnouncement();
+    this.anim.clear();
+    this.scoreTracers = [];
+    this.particles.clear();
+    this.timer.set(0);
+    this.timeDeltaTimer = 0;
+    this.timeDeltaValue = 0;
+    this.finalScore = Math.max(0, Math.round(this.score));
+    this.finalPlacement = null;
+    this.finalName = null;
+    this.pendingPlacement = null;
+    this.audio.play('gameover');
+    this.mechanicBannerText = null;
+
+    const placement = this.highscoreStore
+      ? this.highscoreStore.placementForScore(this.finalScore)
+      : Number.POSITIVE_INFINITY;
+    if (placement < LEADERBOARD_MAX_ENTRIES) {
+      this.prepareNameEntry(placement);
+    } else {
+      this.syncHighscore();
+      this.finalizeGameOver(false);
+    }
+  }
+
+  private prepareNameEntry(placement: number) {
+    this.gamePhase = 'name-entry';
+    this.pendingPlacement = placement;
+    this.syncHighscore();
+    this.nameEntryCursor = 0;
+    this.nameEntryCharIndices = Array(NAME_SLOT_COUNT).fill(0);
+    this.nameInputBuffer = '';
+    this.nameKeyboardRow = 0;
+    this.nameKeyboardCol = 0;
+    if (this.nameEntryMode === 'keyboard') {
+      this.updateSlotsFromBuffer('');
+    } else {
+      this.nameEntrySlots = Array(NAME_SLOT_COUNT).fill(' ');
+    }
+  }
+
+  private commitLeaderboardEntry(name: string) {
+    const sanitized = this.sanitizePlayerName(name);
+    const placement = this.recordScore({ name: sanitized, score: this.finalScore });
+    this.finalPlacement = Number.isFinite(placement) ? placement : null;
+    this.finalName = sanitized;
+    this.syncHighscore();
+    this.finalizeGameOver(true);
+  }
+
+  private finalizeGameOver(didQualify: boolean) {
+    this.pendingPlacement = null;
+    this.nameInputBuffer = '';
+    this.nameEntrySlots = Array(NAME_SLOT_COUNT).fill(' ');
+    this.nameEntryCharIndices = Array(NAME_SLOT_COUNT).fill(0);
+    this.nameEntryCursor = 0;
+    this.nameKeyboardRow = 0;
+    this.nameKeyboardCol = 0;
+    this.gamePhase = 'completed';
+    this.input.removeHandler(this);
+    this.clock.stop();
+    const summary: GameCompletionSummary = {
+      leaderboard: this.getLeaderboardSnapshot(),
+      finalScore: this.finalScore,
+      placement:
+        this.finalPlacement != null && this.finalPlacement < LEADERBOARD_MAX_ENTRIES
+          ? this.finalPlacement
+          : null,
+      didQualify,
+      playerName: this.finalName
+    };
+    this.emitGameComplete(summary);
+  }
+
+  private handleSlotNameEntryInput(event: KeyboardEvent) {
+    const key = event.key;
+    if (key === 'ArrowRight') {
+      this.nameEntryCursor = (this.nameEntryCursor + 1) % NAME_SLOT_COUNT;
+      event.preventDefault();
+      return;
+    }
+    if (key === 'ArrowLeft') {
+      this.nameEntryCursor = (this.nameEntryCursor - 1 + NAME_SLOT_COUNT) % NAME_SLOT_COUNT;
+      event.preventDefault();
+      return;
+    }
+    if (key === 'ArrowUp' || key === 'ArrowDown') {
+      const delta = key === 'ArrowUp' ? 1 : -1;
+      const current = this.nameEntryCharIndices[this.nameEntryCursor] ?? 0;
+      const next = (current + delta + NAME_ALPHABET.length) % NAME_ALPHABET.length;
+      this.nameEntryCharIndices[this.nameEntryCursor] = next;
+      this.nameEntrySlots[this.nameEntryCursor] = NAME_ALPHABET[next];
+      this.nameInputBuffer = this.nameEntrySlots.join('').trimEnd();
+      event.preventDefault();
+      return;
+    }
+    if (key === 'Enter') {
+      event.preventDefault();
+      this.commitLeaderboardEntry(this.nameEntrySlots.join(''));
+    }
+  }
+
+  private handleKeyboardNameEntryInput(event: KeyboardEvent) {
+    const key = event.key;
+    if (key === 'ArrowRight') {
+      const row = NAME_KEYBOARD_ROWS[this.nameKeyboardRow] ?? [];
+      if (row.length > 0) {
+        this.nameKeyboardCol = (this.nameKeyboardCol + 1) % row.length;
+      }
+      event.preventDefault();
+      return;
+    }
+    if (key === 'ArrowLeft') {
+      const row = NAME_KEYBOARD_ROWS[this.nameKeyboardRow] ?? [];
+      if (row.length > 0) {
+        this.nameKeyboardCol = (this.nameKeyboardCol - 1 + row.length) % row.length;
+      }
+      event.preventDefault();
+      return;
+    }
+    if (key === 'ArrowDown') {
+      const nextRow = (this.nameKeyboardRow + 1) % NAME_KEYBOARD_ROWS.length;
+      const nextRowKeys = NAME_KEYBOARD_ROWS[nextRow] ?? [];
+      this.nameKeyboardRow = nextRow;
+      this.nameKeyboardCol = Math.min(this.nameKeyboardCol, Math.max(0, nextRowKeys.length - 1));
+      event.preventDefault();
+      return;
+    }
+    if (key === 'ArrowUp') {
+      const nextRow =
+        (this.nameKeyboardRow - 1 + NAME_KEYBOARD_ROWS.length) % NAME_KEYBOARD_ROWS.length;
+      const nextRowKeys = NAME_KEYBOARD_ROWS[nextRow] ?? [];
+      this.nameKeyboardRow = nextRow;
+      this.nameKeyboardCol = Math.min(this.nameKeyboardCol, Math.max(0, nextRowKeys.length - 1));
+      event.preventDefault();
+      return;
+    }
+    if (key === 'Enter') {
+      event.preventDefault();
+      this.activateKeyboardSelection();
+    }
+  }
+
+  private activateKeyboardSelection() {
+    const row = NAME_KEYBOARD_ROWS[this.nameKeyboardRow] ?? NAME_KEYBOARD_ROWS[0];
+    if (!row || row.length === 0) {
+      return;
+    }
+    const key = row[Math.min(this.nameKeyboardCol, row.length - 1)];
+    if (!key) {
+      return;
+    }
+    if (key === NAME_KEYBOARD_SPECIAL.BACK) {
+      if (this.nameInputBuffer.length > 0) {
+        this.nameInputBuffer = this.nameInputBuffer.slice(0, -1);
+        this.updateSlotsFromBuffer(this.nameInputBuffer);
+      }
+      return;
+    }
+    if (key === NAME_KEYBOARD_SPECIAL.SPACE) {
+      if (this.nameInputBuffer.length < NAME_SLOT_COUNT) {
+        this.nameInputBuffer += ' ';
+        this.updateSlotsFromBuffer(this.nameInputBuffer);
+      }
+      return;
+    }
+    if (key === NAME_KEYBOARD_SPECIAL.OK) {
+      const submission =
+        this.nameInputBuffer.trim().length > 0 ? this.nameInputBuffer : 'PLAYER';
+      this.commitLeaderboardEntry(submission);
+      return;
+    }
+    if (key.length === 1 && this.nameInputBuffer.length < NAME_SLOT_COUNT) {
+      this.nameInputBuffer += key;
+      this.updateSlotsFromBuffer(this.nameInputBuffer);
+    }
   }
 
   private draw() {
@@ -1481,8 +1870,16 @@ export class Game implements InputHandler {
     r.ctx.restore();
 
     const hudMetrics = this.drawScoreboard(r.ctx);
-    this.drawMechanicBanner(r.ctx, hudMetrics);
+    if (!this.mechanicLevelUpNotice && this.gamePhase === 'playing') {
+      this.drawMechanicBanner(r.ctx, hudMetrics);
+    }
     this.drawTimeBar(r.ctx);
+    if (this.gamePhase === 'name-entry') {
+      this.drawNameEntryPanel(r.ctx);
+    }
+    if (this.mechanicLevelUpNotice) {
+      this.drawMechanicLevelAnnouncement(r.ctx);
+    }
 
     this.lastRingCenter = anchor;
   }
@@ -1589,31 +1986,71 @@ export class Game implements InputHandler {
     const centerX = r.w / 2;
     const ringTop = center.y - radius;
 
-    const textFontSize = Math.max(18, Math.round(r.h * 0.05));
+    const descriptorTokens = bannerText
+      ? bannerText.split('|').map((token) => token.trim()).filter((token) => token.length > 0)
+      : [];
+    let descriptorLines: string[] = [];
+    if (descriptorTokens.length === 0) {
+      if (bannerText) descriptorLines = [bannerText];
+    } else if (descriptorTokens.length <= 2) {
+      descriptorLines = [descriptorTokens.join('  •  ')];
+    } else {
+      const maxLines = Math.min(3, Math.ceil(descriptorTokens.length / 2));
+      const perLine = Math.ceil(descriptorTokens.length / maxLines);
+      for (let i = 0; i < descriptorTokens.length; i += perLine) {
+        descriptorLines.push(descriptorTokens.slice(i, i + perLine).join('  •  '));
+      }
+    }
+
+    const descriptorFontSize = Math.max(14, Math.round(r.h * 0.034));
+    const descriptorLineSpacing = Math.max(6, Math.round(descriptorFontSize * 0.3));
     ctx.save();
-    ctx.font = `${textFontSize}px Orbitron, sans-serif`;
-    const textWidth = bannerText ? ctx.measureText(bannerText).width : 0;
+    ctx.font = `${descriptorFontSize}px Orbitron, sans-serif`;
+    const descriptorWidth = descriptorLines.length > 0
+      ? Math.max(...descriptorLines.map((line) => ctx.measureText(line).width))
+      : 0;
     ctx.restore();
+    const descriptorsHeight = descriptorLines.length > 0
+      ? descriptorLines.length * descriptorFontSize + (descriptorLines.length - 1) * descriptorLineSpacing
+      : 0;
 
     const mappingHeight = showRemapMapping ? symbolSize : 0;
-    const textHeight = bannerText ? textFontSize : 0;
-    const textSpacing = showRemapMapping && bannerText ? Math.max(symbolSize * 0.25, 16) : 0;
-    const contentWidth = Math.max(showRemapMapping ? totalWidth : 0, textWidth);
-    const contentHeight = mappingHeight + textSpacing + textHeight;
+    const mappingDescriptorSpacing = mappingHeight > 0 && descriptorsHeight > 0 ? Math.max(symbolSize * 0.2, 12) : 0;
+    const contentWidth = Math.max(showRemapMapping ? totalWidth : 0, descriptorWidth);
+    const contentHeight = mappingHeight + mappingDescriptorSpacing + descriptorsHeight;
 
     const boxPaddingX = Math.max(24, symbolSize * 0.4);
     const boxPaddingY = Math.max(16, symbolSize * 0.3);
     const boxWidth = contentWidth + boxPaddingX * 2;
     const boxHeight = contentHeight + boxPaddingY * 2;
 
-    const desiredGap = Math.max(symbolSize * 0.55, 28);
-    let boxBottom = ringTop - desiredGap;
-    let boxTop = boxBottom - boxHeight;
+    const spanTop = scoreStripBottom;
+    const spanBottom = ringTop;
+    const centerY = spanTop + Math.max(0, (spanBottom - spanTop) / 2);
+    let boxTop = centerY - boxHeight / 2;
+    let boxBottom = boxTop + boxHeight;
 
-    const minTop = scoreStripBottom + Math.max(18, symbolSize * 0.3);
+    const minGap = Math.max(12, symbolSize * 0.26);
+    const minTop = spanTop + minGap;
+    const maxBottom = spanBottom - minGap;
+
     if (boxTop < minTop) {
-      boxTop = minTop;
-      boxBottom = boxTop + boxHeight;
+      const shift = minTop - boxTop;
+      boxTop += shift;
+      boxBottom += shift;
+    }
+    if (boxBottom > maxBottom) {
+      const shift = boxBottom - maxBottom;
+      boxTop -= shift;
+      boxBottom -= shift;
+      if (boxTop < minTop) {
+        boxTop = minTop;
+        boxBottom = boxTop + boxHeight;
+        if (boxBottom > maxBottom) {
+          boxBottom = maxBottom;
+          boxTop = boxBottom - boxHeight;
+        }
+      }
     }
 
     const boxLeft = centerX - boxWidth / 2;
@@ -1683,20 +2120,306 @@ export class Game implements InputHandler {
       ctx.restore();
     }
 
-    if (bannerText) {
-      const textY = innerTop + mappingHeight + (mappingHeight > 0 ? textSpacing : 0) + textFontSize / 2;
+    if (descriptorLines.length > 0) {
+      let lineY = innerTop + mappingHeight + mappingDescriptorSpacing + descriptorFontSize / 2;
       ctx.save();
-      ctx.font = `${textFontSize}px Orbitron, sans-serif`;
+      ctx.font = `${descriptorFontSize}px Orbitron, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = colorWithAlpha('#cdd9e5', 0.95);
       ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-      ctx.shadowBlur = 8;
-      ctx.fillText(bannerText, centerX, textY);
+      ctx.shadowBlur = 6;
+      descriptorLines.forEach((line) => {
+        ctx.fillText(line, centerX, lineY);
+        lineY += descriptorFontSize + descriptorLineSpacing;
+      });
       ctx.restore();
     }
+
   }
 
+  private drawNameEntryPanel(ctx: CanvasRenderingContext2D) {
+    const { w, h } = this.renderer;
+    ctx.save();
+    ctx.fillStyle = 'rgba(6, 10, 18, 0.72)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+
+    const panelWidth = Math.min(w * 0.85, 720);
+    const paddingX = Math.max(28, panelWidth * 0.05);
+    const paddingY = Math.max(24, Math.round(h * 0.04));
+    const titleSize = Math.max(24, Math.round(h * 0.05));
+    const subtitleSize = Math.max(18, Math.round(h * 0.03));
+    const instructionsSize = Math.max(16, Math.round(h * 0.028));
+    const gapTitle = Math.max(12, Math.round(h * 0.018));
+    const gapAfterTitle = Math.max(18, Math.round(h * 0.025));
+    const gapAfterSlots = Math.max(24, Math.round(h * 0.03));
+    const slotSpacing = Math.max(8, Math.round(panelWidth * 0.012));
+    const slotWidth = Math.min(
+      64,
+      Math.max(
+        36,
+        (panelWidth - paddingX * 2 - slotSpacing * (NAME_SLOT_COUNT - 1)) / NAME_SLOT_COUNT
+      )
+    );
+    const slotHeight = Math.max(48, slotWidth * 1.05);
+    const slotsWidth = NAME_SLOT_COUNT * slotWidth + (NAME_SLOT_COUNT - 1) * slotSpacing;
+
+    const baseKeyWidth = Math.min(56, (panelWidth - paddingX * 2) / 11);
+    const keySpacing = Math.max(8, baseKeyWidth * 0.25);
+    const keyHeight = Math.max(44, baseKeyWidth * 0.95);
+    const keyboardHeight =
+      this.nameEntryMode === 'keyboard'
+        ? NAME_KEYBOARD_ROWS.length * keyHeight + keySpacing * (NAME_KEYBOARD_ROWS.length - 1)
+        : 0;
+
+    let panelHeight =
+      paddingY * 2 +
+      titleSize +
+      gapTitle +
+      subtitleSize +
+      gapAfterTitle +
+      slotHeight +
+      gapAfterSlots +
+      instructionsSize;
+    if (this.nameEntryMode === 'keyboard') {
+      panelHeight += keyboardHeight + gapAfterSlots;
+    }
+
+    const panelX = (w - panelWidth) / 2;
+    const panelY = (h - panelHeight) / 2;
+
+    const drawRoundedRect = (x: number, y: number, width: number, height: number, radius: number) => {
+      const rad = Math.min(radius, height / 2, width / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rad, y);
+      ctx.lineTo(x + width - rad, y);
+      ctx.quadraticCurveTo(x + width, y, x + width, y + rad);
+      ctx.lineTo(x + width, y + height - rad);
+      ctx.quadraticCurveTo(x + width, y + height, x + width - rad, y + height);
+      ctx.lineTo(x + rad, y + height);
+      ctx.quadraticCurveTo(x, y + height, x, y + height - rad);
+      ctx.lineTo(x, y + rad);
+      ctx.quadraticCurveTo(x, y, x + rad, y);
+      ctx.closePath();
+    };
+
+    ctx.save();
+    drawRoundedRect(panelX, panelY, panelWidth, panelHeight, Math.min(32, panelHeight * 0.08));
+    ctx.fillStyle = 'rgba(12, 18, 28, 0.95)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(121, 192, 255, 0.35)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+
+    let currentY = panelY + paddingY;
+    const placementText =
+      this.pendingPlacement != null
+        ? `Rank ${this.pendingPlacement + 1}/${LEADERBOARD_MAX_ENTRIES}`
+        : `Top ${LEADERBOARD_MAX_ENTRIES}`;
+    const subtitle = `${placementText} | Score ${this.finalScore}`;
+
+    ctx.save();
+    ctx.font = `${titleSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#79c0ff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('Enter Your Name', w / 2, currentY);
+    ctx.restore();
+
+    currentY += titleSize + gapTitle;
+
+    ctx.save();
+    ctx.font = `${subtitleSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = 'rgba(205, 217, 229, 0.9)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(subtitle, w / 2, currentY);
+    ctx.restore();
+
+    currentY += subtitleSize + gapAfterTitle;
+
+    const slotsX = (w - slotsWidth) / 2;
+    const keyboardActiveSlot =
+      this.nameInputBuffer.length >= NAME_SLOT_COUNT
+        ? NAME_SLOT_COUNT - 1
+        : this.nameInputBuffer.length;
+    const activeSlot =
+      this.nameEntryMode === 'slots' ? this.nameEntryCursor : keyboardActiveSlot;
+
+    for (let i = 0; i < NAME_SLOT_COUNT; i += 1) {
+      const x = slotsX + i * (slotWidth + slotSpacing);
+      const isActive = activeSlot === i;
+      const radius = Math.min(12, slotHeight * 0.25);
+      ctx.save();
+      drawRoundedRect(x, currentY, slotWidth, slotHeight, radius);
+      ctx.fillStyle = isActive ? 'rgba(121, 192, 255, 0.18)' : 'rgba(14, 21, 32, 0.95)';
+      ctx.fill();
+      ctx.strokeStyle = isActive ? '#79c0ff' : 'rgba(148, 163, 184, 0.55)';
+      ctx.lineWidth = isActive ? 3 : 1.5;
+      ctx.stroke();
+      const char = this.nameEntrySlots[i] ?? ' ';
+      ctx.font = `${Math.max(24, slotHeight * 0.55)}px Orbitron, sans-serif`;
+      ctx.fillStyle = '#f8fafc';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(char.trim() ? char : '_', x + slotWidth / 2, currentY + slotHeight / 2);
+      ctx.restore();
+    }
+
+    currentY += slotHeight;
+
+    if (this.nameEntryMode === 'keyboard') {
+      currentY += gapAfterSlots;
+      const getKeyWidth = (value: string) => {
+        if (value === NAME_KEYBOARD_SPECIAL.SPACE) return baseKeyWidth * 2.6;
+        if (value === NAME_KEYBOARD_SPECIAL.BACK) return baseKeyWidth * 1.8;
+        if (value === NAME_KEYBOARD_SPECIAL.OK) return baseKeyWidth * 1.4;
+        return baseKeyWidth;
+      };
+      const keyFontSize = Math.max(16, keyHeight * 0.45);
+      NAME_KEYBOARD_ROWS.forEach((row, rowIndex) => {
+        const widths = row.map(getKeyWidth);
+        const totalRowWidth =
+          widths.reduce((sum, width) => sum + width, 0) +
+          keySpacing * Math.max(0, row.length - 1);
+        let keyX = panelX + (panelWidth - totalRowWidth) / 2;
+        row.forEach((value, colIndex) => {
+          const width = widths[colIndex];
+          const selected = rowIndex === this.nameKeyboardRow && colIndex === this.nameKeyboardCol;
+          ctx.save();
+          drawRoundedRect(keyX, currentY, width, keyHeight, Math.min(12, keyHeight * 0.3));
+          ctx.fillStyle = selected ? 'rgba(121, 192, 255, 0.2)' : 'rgba(16, 25, 38, 0.94)';
+          ctx.fill();
+          ctx.strokeStyle = selected ? '#79c0ff' : 'rgba(148, 163, 184, 0.5)';
+          ctx.lineWidth = selected ? 3 : 1.2;
+          ctx.stroke();
+          ctx.font = `${keyFontSize}px Orbitron, sans-serif`;
+          ctx.fillStyle = '#e2e8f0';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const label =
+            value === NAME_KEYBOARD_SPECIAL.SPACE
+              ? 'SPACE'
+              : value === NAME_KEYBOARD_SPECIAL.BACK
+                ? 'BACK'
+                : value;
+          ctx.fillText(label, keyX + width / 2, currentY + keyHeight / 2);
+          ctx.restore();
+          keyX += width + keySpacing;
+        });
+        currentY += keyHeight;
+        if (rowIndex < NAME_KEYBOARD_ROWS.length - 1) {
+          currentY += keySpacing;
+        }
+      });
+      currentY += gapAfterSlots;
+    } else {
+      currentY += gapAfterSlots;
+    }
+
+    const instructions =
+      this.nameEntryMode === 'keyboard'
+        ? 'Use arrows to move. Enter selects. Choose OK when finished.'
+        : 'Use arrows to change letters. Press Enter when ready.';
+    const instructionsY = panelY + panelHeight - paddingY - instructionsSize;
+
+    ctx.save();
+    ctx.font = `${instructionsSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = 'rgba(205, 217, 229, 0.88)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(instructions, w / 2, instructionsY);
+    ctx.restore();
+  }
+
+  // Leaderboard overlay rendering removed; handled in UI layer.
+
+  private drawMechanicLevelAnnouncement(ctx: CanvasRenderingContext2D) {
+    const notice = this.mechanicLevelUpNotice;
+    if (!notice) {
+      return;
+    }
+
+    const { w, h } = this.renderer;
+    ctx.save();
+    ctx.fillStyle = 'rgba(6, 10, 18, 0.62)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+
+    const titleSize = Math.max(26, Math.round(h * 0.06));
+    const bodySize = Math.max(18, Math.round(h * 0.033));
+    const detailSize = Math.max(15, Math.round(h * 0.028));
+    const lines: Array<{ text: string; size: number; color: string; shadow: number }> = [
+      { text: notice.title, size: titleSize, color: '#79c0ff', shadow: 16 },
+      { text: notice.body, size: bodySize, color: '#cdd9e5', shadow: 10 }
+    ];
+    if (notice.detail) {
+      lines.push({ text: notice.detail, size: detailSize, color: '#94a3b8', shadow: 8 });
+    }
+
+    const lineSpacing = Math.max(12, Math.round(h * 0.018));
+    let maxWidth = 0;
+    ctx.save();
+    lines.forEach((line) => {
+      ctx.font = `${line.size}px Orbitron, sans-serif`;
+      maxWidth = Math.max(maxWidth, ctx.measureText(line.text).width);
+    });
+    ctx.restore();
+
+    const paddingX = Math.max(32, Math.round(w * 0.05));
+    const paddingY = Math.max(28, Math.round(h * 0.04));
+    const contentHeight =
+      lines.reduce((total, line) => total + line.size, 0) + lineSpacing * (lines.length - 1);
+    const boxWidth = Math.min(w * 0.8, maxWidth + paddingX * 2);
+    const boxHeight = contentHeight + paddingY * 2;
+    const boxX = (w - boxWidth) / 2;
+    const boxY = (h - boxHeight) / 2;
+    const cornerRadius = Math.min(boxHeight / 2, Math.max(20, Math.round(boxWidth * 0.06)));
+
+    const drawRoundedRect = (x: number, y: number, width: number, height: number, radius: number) => {
+      const rad = Math.min(radius, height / 2, width / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rad, y);
+      ctx.lineTo(x + width - rad, y);
+      ctx.quadraticCurveTo(x + width, y, x + width, y + rad);
+      ctx.lineTo(x + width, y + height - rad);
+      ctx.quadraticCurveTo(x + width, y + height, x + width - rad, y + height);
+      ctx.lineTo(x + rad, y + height);
+      ctx.quadraticCurveTo(x, y + height, x, y + height - rad);
+      ctx.lineTo(x, y + rad);
+      ctx.quadraticCurveTo(x, y, x + rad, y);
+      ctx.closePath();
+    };
+
+    ctx.save();
+    drawRoundedRect(boxX, boxY, boxWidth, boxHeight, cornerRadius);
+    ctx.fillStyle = 'rgba(12, 18, 28, 0.94)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(121, 192, 255, 0.45)';
+    ctx.lineWidth = Math.max(2, Math.round(boxWidth * 0.006));
+    ctx.stroke();
+    ctx.restore();
+
+    let currentY = boxY + paddingY;
+    lines.forEach((line, index) => {
+      currentY += line.size / 2;
+      ctx.save();
+      ctx.font = `${line.size}px Orbitron, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = line.color;
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
+      ctx.shadowBlur = line.shadow;
+      ctx.fillText(line.text, w / 2, currentY);
+      ctx.restore();
+      currentY += line.size / 2;
+      if (index < lines.length - 1) {
+        currentY += lineSpacing;
+      }
+    });
+  }
   private drawTimeBar(ctx: CanvasRenderingContext2D) {
     const r = this.renderer;
     const pad = Math.round(Math.max(12, r.h * 0.03));

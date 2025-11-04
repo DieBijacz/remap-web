@@ -16,9 +16,7 @@ export type Config = {
   uiFontScale?: number;
   memoryPreviewDuration?: number;
   particlesPerScore?: number;
-  particlesEnabled?: boolean;
   particlesPersist?: boolean;
-  scoreRayEnabled?: boolean;
   scoreRayThickness?: number;
   scoreRayCount?: number;
   scoreRayIntensity?: number;
@@ -26,6 +24,7 @@ export type Config = {
   mechanicEnableSpin?: boolean;
   mechanicEnableMemory?: boolean;
   mechanicEnableJoystick?: boolean;
+  nameEntryMode?: 'slots' | 'keyboard';
 };
 
 export default class ConfigStore {

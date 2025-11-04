@@ -1,8 +1,9 @@
 ﻿import './styles/ui.scss';
-import { Game } from './game/Game';
+import { Game, type GameCompletionSummary } from './game/Game';
 import { GameStateManager, GameState } from './core/GameStateManager';
 import ConfigStore from './storage/ConfigStore';
 import type { Config as PersistentConfig } from './storage/ConfigStore';
+import type { HighscoreEntry } from './storage/HighscoreStore';
 // Initialize game state manager
 const stateManager = new GameStateManager();
 
@@ -12,15 +13,44 @@ if (!canvas) throw new Error('Canvas element not found');
 
 const ctx = canvas.getContext('2d')!;
 
+const LEADERBOARD_LIMIT = 10;
+
+type LeaderboardScreenData = {
+  entries: HighscoreEntry[];
+  highlightIndex: number | null;
+  finalScore: number;
+  playerName: string | null;
+  fromGame: boolean;
+  didQualify: boolean;
+};
+
+let leaderboardScreenData: LeaderboardScreenData = {
+  entries: [],
+  highlightIndex: null,
+  finalScore: 0,
+  playerName: null,
+  fromGame: false,
+  didQualify: false
+};
+
 const configStore = new ConfigStore();
-const persistedConfig = configStore.load();
+const rawPersistedConfig = configStore.load() as PersistentConfig & {
+  particlesEnabled?: boolean;
+  scoreRayEnabled?: boolean;
+};
+const {
+  particlesEnabled: legacyParticlesEnabled,
+  scoreRayEnabled: legacyScoreRayEnabled,
+  ...persistedConfigRest
+} = rawPersistedConfig;
+const persistedConfig: PersistentConfig = persistedConfigRest;
 const persistedMemoryPreview = persistedConfig.memoryPreviewDuration ?? 1;
-const persistedParticlesPerScore = persistedConfig.particlesPerScore ?? 4;
-const particlesEnabledDefault =
-  persistedParticlesPerScore > 0 ? persistedConfig.particlesEnabled ?? true : false;
-const persistedScoreRayCount = persistedConfig.scoreRayCount ?? 3;
-const scoreRayEnabledDefault =
-  persistedScoreRayCount > 0 ? persistedConfig.scoreRayEnabled ?? true : false;
+const persistedParticlesPerScore =
+  legacyParticlesEnabled === false ? 0 : persistedConfig.particlesPerScore ?? 4;
+const persistedScoreRayCount =
+  legacyScoreRayEnabled === false ? 0 : persistedConfig.scoreRayCount ?? 3;
+const nameEntryModeDefault =
+  persistedConfig.nameEntryMode === 'keyboard' ? 'keyboard' : 'slots';
 let settingsValues: PersistentConfig = {
   ...persistedConfig,
   initialTime: persistedConfig.initialTime ?? 60,
@@ -36,21 +66,33 @@ let settingsValues: PersistentConfig = {
   symbolStroke: persistedConfig.symbolStroke ?? 1,
   uiFontScale: persistedConfig.uiFontScale ?? 0.9,
   particlesPerScore: persistedParticlesPerScore,
-  particlesEnabled: particlesEnabledDefault,
   particlesPersist: persistedConfig.particlesPersist ?? false,
-  scoreRayEnabled: scoreRayEnabledDefault,
   scoreRayCount: persistedScoreRayCount,
   scoreRayThickness: persistedConfig.scoreRayThickness ?? 1,
   scoreRayIntensity: persistedConfig.scoreRayIntensity ?? 1,
   mechanicEnableRemap: persistedConfig.mechanicEnableRemap ?? true,
   mechanicEnableSpin: persistedConfig.mechanicEnableSpin ?? true,
   mechanicEnableMemory: persistedConfig.mechanicEnableMemory ?? true,
-  mechanicEnableJoystick: persistedConfig.mechanicEnableJoystick ?? true
+  mechanicEnableJoystick: persistedConfig.mechanicEnableJoystick ?? true,
+  nameEntryMode: nameEntryModeDefault
 };
 configStore.save(settingsValues);
 
 const game = new Game(canvas);
 game.refreshSettings(settingsValues);
+game.onGameComplete((summary: GameCompletionSummary) => {
+  const highlight =
+    summary.didQualify && summary.placement != null ? summary.placement : null;
+  leaderboardScreenData = {
+    entries: summary.leaderboard,
+    highlightIndex: highlight,
+    finalScore: summary.finalScore,
+    playerName: summary.playerName ?? null,
+    fromGame: true,
+    didQualify: summary.didQualify
+  };
+  stateManager.showState(GameState.LEADERBOARD);
+});
 
 let settingsReturnState: GameState | null = null;
 
@@ -240,12 +282,6 @@ const SETTINGS_TABS: SettingsTab[] = [
         format: (v) => `${v.toFixed(2)}x`
       },
       {
-        type: 'toggle',
-        key: 'particlesEnabled',
-        label: 'Particles Enabled',
-        format: (value) => (value ? 'On' : 'Off')
-      },
-      {
         type: 'number',
         key: 'particlesPerScore',
         label: 'Particles per Hit',
@@ -258,12 +294,6 @@ const SETTINGS_TABS: SettingsTab[] = [
         type: 'toggle',
         key: 'particlesPersist',
         label: 'Keep Orbiting',
-        format: (value) => (value ? 'On' : 'Off')
-      },
-      {
-        type: 'toggle',
-        key: 'scoreRayEnabled',
-        label: 'Score Ray Enabled',
         format: (value) => (value ? 'On' : 'Off')
       },
       {
@@ -309,6 +339,13 @@ const SETTINGS_TABS: SettingsTab[] = [
         format: (v) => `${Math.round(v * 100)}%`
       },
       {
+        type: 'cycle',
+        key: 'nameEntryMode',
+        label: 'Name Entry',
+        options: ['slots', 'keyboard'],
+        format: (value) => (value === 'keyboard' ? 'On-screen Keyboard' : 'Letter Slots')
+      },
+      {
         type: 'action',
         label: 'Reset Highscore',
         description: 'Press Enter to clear best score',
@@ -336,6 +373,7 @@ let settingsMessage: string | null = null;
 
 // Menu UI button rectangles (in CSS pixels)
 let startButtonRect: DOMRect | null = null;
+let leaderboardButtonRect: DOMRect | null = null;
 let settingsButtonRect: DOMRect | null = null;
 let backButtonRect: DOMRect | null = null;
 let tabButtonRects: DOMRect[] = [];
@@ -391,15 +429,18 @@ function drawMenu() {
   const btnW = Math.round(cssW * 0.4);
   const btnH = Math.max(40, Math.round(cssH * 0.08));
   const btnX = Math.round((cssW - btnW) / 2);
-  const startY = Math.round(cssH * 0.4);
-  const settingsY = startY + btnH + 16;
+  const startY = Math.round(cssH * 0.38);
+  const leaderboardY = startY + btnH + 16;
+  const settingsY = leaderboardY + btnH + 16;
 
   ctx.font = `${Math.max(16, Math.round(cssH * 0.04))}px Orbitron, sans-serif`;
   drawButton(btnX, startY, btnW, btnH, 'Start Game');
+  drawButton(btnX, leaderboardY, btnW, btnH, 'Leaderboard');
   drawButton(btnX, settingsY, btnW, btnH, 'Settings');
 
   // store rects in CSS pixel coordinates
   startButtonRect = new DOMRect(btnX, startY, btnW, btnH);
+  leaderboardButtonRect = new DOMRect(btnX, leaderboardY, btnW, btnH);
   settingsButtonRect = new DOMRect(btnX, settingsY, btnW, btnH);
 
   const hintY = settingsY + btnH + Math.max(28, Math.round(cssH * 0.05));
@@ -410,6 +451,204 @@ function drawMenu() {
   ctx.fillText('Press O to open options', cssW / 2, hintY);
 
   ctx.restore();
+}
+
+function showLeaderboardFromMenu() {
+  const entries = game.getLeaderboardSnapshot();
+  leaderboardScreenData = {
+    entries,
+    highlightIndex: null,
+    finalScore: 0,
+    playerName: null,
+    fromGame: false,
+    didQualify: false
+  };
+  stateManager.showState(GameState.LEADERBOARD);
+}
+
+function drawLeaderboardScreen() {
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.save();
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = 'rgba(6, 10, 18, 0.78)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+
+  const rows: Array<HighscoreEntry | null> = leaderboardScreenData.entries
+    .slice(0, LEADERBOARD_LIMIT)
+    .map((entry) => (entry ? { ...entry } : null));
+  while (rows.length < LEADERBOARD_LIMIT) {
+    rows.push(null);
+  }
+
+  const hasEntries = rows.some((entry) => entry);
+
+  const highlight =
+    leaderboardScreenData.highlightIndex != null &&
+    leaderboardScreenData.highlightIndex >= 0 &&
+    leaderboardScreenData.highlightIndex < LEADERBOARD_LIMIT
+      ? leaderboardScreenData.highlightIndex
+      : null;
+
+  const paddingX = Math.max(24, Math.round(w * 0.06));
+  const paddingY = Math.max(20, Math.round(h * 0.035));
+  const titleSize = Math.max(28, Math.round(h * 0.055));
+  const rowHeight = Math.max(30, Math.round(h * 0.05));
+  const gapAfterTitle = Math.max(18, Math.round(h * 0.024));
+  const instructionsSize = Math.max(16, Math.round(h * 0.028));
+  const panelWidth = Math.min(Math.round(w * 0.78), 780);
+
+  const subtitleSize = Math.max(18, Math.round(h * 0.032));
+  const subtitleGap = Math.max(12, Math.round(h * 0.018));
+
+  const rowsHeight = rows.length * rowHeight;
+  const basePanelHeight =
+    paddingY * 2 + titleSize + subtitleSize + subtitleGap + gapAfterTitle + rowsHeight + gapAfterTitle + instructionsSize;
+
+  const panelHeight = basePanelHeight;
+  const panelX = (w - panelWidth) / 2;
+  const panelY = Math.max(h * 0.08, (h - panelHeight) / 2);
+
+  const drawRoundedRect = (x: number, y: number, width: number, height: number, radius: number) => {
+    const rad = Math.min(radius, height / 2, width / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rad, y);
+    ctx.lineTo(x + width - rad, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + rad);
+    ctx.lineTo(x + width, y + height - rad);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - rad, y + height);
+    ctx.lineTo(x + rad, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - rad);
+    ctx.lineTo(x, y + rad);
+    ctx.quadraticCurveTo(x, y, x + rad, y);
+    ctx.closePath();
+  };
+
+  ctx.save();
+  drawRoundedRect(panelX, panelY, panelWidth, panelHeight, Math.min(32, panelHeight * 0.08));
+  ctx.fillStyle = 'rgba(12, 18, 28, 0.95)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(121, 192, 255, 0.32)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
+
+  let rowY = panelY + paddingY;
+  ctx.save();
+  ctx.font = `${titleSize}px Orbitron, sans-serif`;
+  ctx.fillStyle = '#79c0ff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('Top Scores', w / 2, rowY);
+  ctx.restore();
+
+  rowY += titleSize + Math.max(8, Math.round(h * 0.012));
+
+  const subtitleText = (() => {
+    if (!hasEntries) {
+      return 'No scores recorded yet';
+    }
+    if (!leaderboardScreenData.fromGame) {
+      return 'Best results across all sessions';
+    }
+    if (leaderboardScreenData.didQualify) {
+      return leaderboardScreenData.playerName
+        ? `${leaderboardScreenData.playerName} joined the leaderboard!`
+        : 'A new score entered the leaderboard!';
+    }
+    return `Final Score ${leaderboardScreenData.finalScore.toLocaleString()}`;
+  })();
+
+  ctx.save();
+  ctx.font = `${subtitleSize}px Orbitron, sans-serif`;
+  ctx.fillStyle = 'rgba(205, 217, 229, 0.9)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(subtitleText, w / 2, rowY);
+  ctx.restore();
+
+  rowY += subtitleSize + subtitleGap;
+
+  const rankWidth = Math.max(40, Math.round(panelWidth * 0.1));
+  const rowWidth = panelWidth - paddingX * 2;
+  const rowFontSize = Math.max(18, Math.round(rowHeight * 0.55));
+
+  rows.forEach((entry, index) => {
+    const centerY = rowY + rowHeight / 2;
+    const isHighlight = highlight === index;
+    if (isHighlight) {
+      ctx.save();
+      drawRoundedRect(
+        panelX + paddingX,
+        rowY,
+        rowWidth,
+        rowHeight,
+        Math.min(10, rowHeight * 0.35)
+      );
+      ctx.fillStyle = 'rgba(121, 192, 255, 0.18)';
+      ctx.fill();
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.font = `${rowFontSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = entry ? (isHighlight ? '#79c0ff' : '#e2e8f0') : 'rgba(148, 163, 184, 0.6)';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    const rankText = `${(index + 1).toString().padStart(2, '0')}.`;
+    ctx.fillText(rankText, panelX + paddingX, centerY);
+    const name = entry ? entry.name : '---';
+    ctx.fillText(name, panelX + paddingX + rankWidth, centerY);
+    ctx.textAlign = 'right';
+    const scoreText = entry ? entry.score.toLocaleString() : '---';
+    ctx.fillText(scoreText, panelX + paddingX + rowWidth, centerY);
+    ctx.restore();
+
+    rowY += rowHeight;
+  });
+
+  const instructions = leaderboardScreenData.fromGame
+    ? 'Press Enter to continue'
+    : 'Press Enter or Esc to return';
+  const instructionsY = panelY + panelHeight - paddingY - instructionsSize;
+  ctx.save();
+  ctx.font = `${instructionsSize}px Orbitron, sans-serif`;
+  ctx.fillStyle = 'rgba(205, 217, 229, 0.9)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(instructions, w / 2, instructionsY);
+  ctx.restore();
+
+  const showFinalScore =
+    leaderboardScreenData.fromGame && !leaderboardScreenData.didQualify;
+  if (showFinalScore) {
+    const boxWidth = Math.min(panelWidth, w * 0.7);
+    const boxHeight = Math.max(72, Math.round(h * 0.1));
+    const boxX = (w - boxWidth) / 2;
+    const boxY = Math.min(
+      h - boxHeight - Math.max(32, h * 0.08),
+      panelY + panelHeight + Math.max(32, h * 0.06)
+    );
+    ctx.save();
+    drawRoundedRect(boxX, boxY, boxWidth, boxHeight, Math.min(24, boxHeight * 0.4));
+    ctx.fillStyle = 'rgba(12, 18, 28, 0.92)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(121, 192, 255, 0.3)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.font = `${Math.max(18, Math.round(boxHeight * 0.32))}px Orbitron, sans-serif`;
+    ctx.fillStyle = 'rgba(205, 217, 229, 0.82)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Final Score', w / 2, boxY + boxHeight * 0.35);
+    ctx.font = `${Math.max(30, Math.round(boxHeight * 0.5))}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillText(leaderboardScreenData.finalScore.toLocaleString(), w / 2, boxY + boxHeight * 0.72);
+    ctx.restore();
+  }
 }
 
 function drawSettings() {
@@ -588,6 +827,10 @@ canvas.addEventListener('click', (ev) => {
       game.start();
       return;
     }
+    if (leaderboardButtonRect && pointInRect(x, y, leaderboardButtonRect)) {
+      showLeaderboardFromMenu();
+      return;
+    }
     if (settingsButtonRect && pointInRect(x, y, settingsButtonRect)) {
       enterSettings(state);
       return;
@@ -602,6 +845,18 @@ canvas.addEventListener('click', (ev) => {
       exitSettings();
       return;
     }
+  } else if (state === GameState.LEADERBOARD) {
+    leaderboardScreenData = {
+      entries: leaderboardScreenData.entries,
+      highlightIndex: null,
+      finalScore: leaderboardScreenData.finalScore,
+      playerName: leaderboardScreenData.playerName,
+      fromGame: false,
+      didQualify: false
+    };
+    stateManager.showState(GameState.MENU);
+    drawMenu();
+    return;
   }
 });
 
@@ -620,13 +875,7 @@ function adjustNumberSetting(option: Extract<SettingItem, { type: 'number' }>, d
   const current = typeof currentRaw === 'number' ? currentRaw : option.min;
   const decimals = option.step.toString().split('.')[1]?.length ?? 0;
   const next = clampNumber(current + direction * option.step, option.min, option.max, decimals);
-  const updates: Partial<PersistentConfig> = { [option.key]: next } as Partial<PersistentConfig>;
-  if (option.key === 'particlesPerScore') {
-    updates.particlesEnabled = next > 0;
-  } else if (option.key === 'scoreRayCount') {
-    updates.scoreRayEnabled = next > 0;
-  }
-  persistSettings(updates as PersistentConfig);
+  persistSettings({ [option.key]: next } as PersistentConfig);
   settingsMessage = null;
   drawSettings();
 }
@@ -729,6 +978,26 @@ function handleSettingsKey(e: KeyboardEvent) {
   }
 }
 
+function handleLeaderboardKey(e: KeyboardEvent) {
+  if (['ArrowUp', 'ArrowRight', 'ArrowDown', 'ArrowLeft'].includes(e.key)) {
+    e.preventDefault();
+    return;
+  }
+  if (['Enter', 'Escape', ' '].includes(e.key)) {
+    leaderboardScreenData = {
+      entries: leaderboardScreenData.entries,
+      highlightIndex: null,
+      finalScore: leaderboardScreenData.finalScore,
+      playerName: leaderboardScreenData.playerName,
+      fromGame: false,
+      didQualify: false
+    };
+    stateManager.showState(GameState.MENU);
+    drawMenu();
+    e.preventDefault();
+  }
+}
+
 // Redraw UI when state changes
 stateManager.onChange((s) => {
   if (s === GameState.MENU) {
@@ -743,6 +1012,9 @@ stateManager.onChange((s) => {
   if (s === GameState.GAME) {
     // clear menu UI; game.start will kick off the game loop which draws to canvas
     clearCanvas();
+  }
+  if (s === GameState.LEADERBOARD) {
+    drawLeaderboardScreen();
   }
 });
 
@@ -765,14 +1037,8 @@ document.addEventListener('keydown', (e) => {
     handleSettingsKey(e);
     return;
   }
-  if (state === GameState.GAME) {
-    const keys = ['ArrowUp', 'ArrowRight', 'ArrowDown', 'ArrowLeft'];
-    if (keys.includes(e.key)) {
-      try {
-        (game as any).onKeyDown?.(e as KeyboardEvent);
-      } catch (err) {
-        console.error('[debug] forwarding key to game failed', err);
-      }
-    }
+  if (state === GameState.LEADERBOARD) {
+    handleLeaderboardKey(e);
+    return;
   }
 });
