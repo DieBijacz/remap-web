@@ -1,4 +1,4 @@
-export type SymbolType = 'square' | 'circle' | 'triangle' | 'cross';
+import type { SymbolType } from './Symbols';
 
 export interface SymbolProps {
   type: SymbolType;
@@ -18,7 +18,9 @@ export class DOMSymbol {
     // append into the game container so symbols stay inside the 9:16 viewport
     const container = document.getElementById('game-container') || document.body;
     // ensure container is positioned so absolute children are aligned
-    if (container && container instanceof HTMLElement) container.style.position = container.style.position || 'relative';
+    if (container && container instanceof HTMLElement) {
+      container.style.position = container.style.position || 'relative';
+    }
     container.appendChild(this.element);
   }
 
@@ -37,7 +39,9 @@ export class DOMSymbol {
     // Always set transform to center and scale
     const transform = `translate(-50%, -50%) scale(${scale})`;
     this.element.style.transform = transform;
-  } remove() {
+  }
+
+  remove() {
     this.element.remove();
   }
 }

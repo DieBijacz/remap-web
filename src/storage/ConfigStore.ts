@@ -1,4 +1,4 @@
-﻿const CONFIG_KEY = 'remap:config';
+const CONFIG_KEY = 'remap:config';
 
 export type Config = {
   palette?: string;
@@ -25,6 +25,7 @@ export type Config = {
   mechanicEnableMemory?: boolean;
   mechanicEnableJoystick?: boolean;
   nameEntryMode?: 'slots' | 'keyboard';
+  symbolTheme?: 'classic' | 'pacman';
 };
 
 export default class ConfigStore {
@@ -42,3 +43,4 @@ export default class ConfigStore {
     }
   }
 }
+

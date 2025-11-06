@@ -65,6 +65,77 @@
   transform: translateX(-50%) rotate(-45deg);
 }
 
+/* Pac-Man */
+.symbol.pacman::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 40% 38%, rgba(255, 255, 255, 0.9) 0 16%, rgba(255, 255, 255, 0) 18%),
+    conic-gradient(from -28deg at 50% 50%, transparent 0deg 36deg, #f8d94a 36deg 324deg, transparent 324deg 360deg);
+  box-shadow: 0 0 18px rgba(248, 217, 74, 0.78), 0 0 34px rgba(248, 217, 74, 0.45);
+}
+
+.symbol.pacman::after {
+  content: '';
+  position: absolute;
+  width: 22%;
+  height: 22%;
+  top: 32%;
+  left: 58%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 42% 42%, rgba(255, 255, 255, 0.95) 0 36%, transparent 40%), #121929;
+  box-shadow: 0 0 8px rgba(12, 25, 41, 0.6);
+}
+
+/* Ghosts */
+.symbol.ghost-pink,
+.symbol.ghost-blue,
+.symbol.ghost-orange {
+  --ghost-color: #ff5ae0;
+  --ghost-glow: rgba(255, 90, 224, 0.75);
+}
+
+.symbol.ghost-blue {
+  --ghost-color: #4fb8ff;
+  --ghost-glow: rgba(79, 184, 255, 0.75);
+}
+
+.symbol.ghost-orange {
+  --ghost-color: #ff9b4a;
+  --ghost-glow: rgba(255, 155, 74, 0.78);
+}
+
+.symbol.ghost-pink::before,
+.symbol.ghost-blue::before,
+.symbol.ghost-orange::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 48% 48% 30% 30% / 60% 60% 24% 24%;
+  background:
+    radial-gradient(circle at 35% 38%, rgba(255, 255, 255, 0.95) 0 18%, transparent 20%),
+    radial-gradient(circle at 65% 38%, rgba(255, 255, 255, 0.95) 0 18%, transparent 20%),
+    radial-gradient(circle at 43% 38%, transparent 0 24%, rgba(12, 20, 38, 0.9) 25% 32%, transparent 33%),
+    radial-gradient(circle at 73% 38%, transparent 0 24%, rgba(12, 20, 38, 0.9) 25% 32%, transparent 33%),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.32) 0 26%, var(--ghost-color) 28% 100%);
+  box-shadow: 0 0 18px var(--ghost-glow), 0 0 32px rgba(255, 255, 255, 0.12);
+}
+
+.symbol.ghost-pink::after,
+.symbol.ghost-blue::after,
+.symbol.ghost-orange::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 36%;
+  background:
+    radial-gradient(circle at 12.5% 0%, transparent 52%, var(--ghost-color) 53%) 0 0 / 25% 100% repeat-x;
+  filter: drop-shadow(0 0 12px var(--ghost-glow));
+}
 /* Target state - increase glow effect */
 .symbol.target.square {
   border-color: #FFE135;
@@ -85,4 +156,24 @@
 .symbol.target.cross::after {
   background: #00A6ED;
   box-shadow: 0 0 20px rgba(0, 166, 237, 0.9);
+}
+
+.symbol.target.pacman::before {
+  box-shadow: 0 0 26px rgba(248, 217, 74, 0.9), 0 0 40px rgba(248, 217, 74, 0.65);
+}
+
+.symbol.target.pacman::after {
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.75);
+}
+
+.symbol.target.ghost-pink::before,
+.symbol.target.ghost-blue::before,
+.symbol.target.ghost-orange::before {
+  box-shadow: 0 0 24px var(--ghost-glow), 0 0 42px var(--ghost-glow);
+}
+
+.symbol.target.ghost-pink::after,
+.symbol.target.ghost-blue::after,
+.symbol.target.ghost-orange::after {
+  filter: drop-shadow(0 0 16px var(--ghost-glow)) brightness(1.08);
 }

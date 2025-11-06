@@ -2,20 +2,19 @@
 import { Renderer2D } from '../render/Renderer2D';
 import { AnimationTimeline, easeOutCubic } from '../core/Animation';
 import { Timer } from '../core/Timer';
-import { drawSymbol, SYMBOL_PALETTES } from '../render/Symbols';
-import type { Symbol, SymbolType } from '../render/Symbols';
+import { drawSymbol, SYMBOL_PALETTES, SYMBOL_THEME_SETS } from '../render/Symbols';
+import type { Symbol, SymbolType, SymbolTheme } from '../render/Symbols';
 import type { InputHandler } from '../input/InputManager';
 import { InputManager } from '../input/InputManager';
 import { EffectsManager } from '../fx/EffectsManager';
 import { ParticleSystem } from '../fx/ParticleSystem';
-import { AudioManager } from '../audio/AudioManager';
+import { AudioSystem } from '../audio/AudioSystem';
 import correctSfxUrl from '../audio/sfx/sfx_point.wav';
 import wrongSfxUrl from '../audio/sfx/sfx_wrong.wav';
 import HighscoreStore, { type HighscoreEntry } from '../storage/HighscoreStore';
 import ConfigStore from '../storage/ConfigStore';
 import type { Config as PersistentConfig } from '../storage/ConfigStore';
 
-const RING_SYMBOL_TYPES: SymbolType[] = ['triangle', 'square', 'circle', 'cross'];
 const BASE_RING_SYMBOL_SCALE = 1.22;
 const BASE_CENTER_SCALE = 1.85;
 const CENTER_MIN_RATIO = 0.4;
@@ -220,6 +219,7 @@ interface GameConfig {
   ringRadiusFactor: number;// Relative radius of outer ring
   symbolScale: number;
   symbolStroke: number;
+  symbolTheme: SymbolTheme;
 }
 
 export class Game implements InputHandler {
@@ -230,7 +230,7 @@ export class Game implements InputHandler {
   private input: InputManager;
   private effects: EffectsManager;
   private particles = new ParticleSystem();
-  private audio: AudioManager;
+  private audio: AudioSystem;
   private score = 0;
   private streak = 0;
   private highscore = 0;
@@ -244,7 +244,8 @@ export class Game implements InputHandler {
     bonusWindow: 2.5,
     ringRadiusFactor: 0.15,
     symbolScale: 1,
-    symbolStroke: 1
+    symbolStroke: 1,
+    symbolTheme: 'classic'
   };
   private timeDeltaValue = 0;
   private timeDeltaTimer = 0;
@@ -257,7 +258,8 @@ export class Game implements InputHandler {
     bonusWindow: 2.5,
     ringRadiusFactor: 0.15,
     symbolScale: 1,
-    symbolStroke: 1
+    symbolStroke: 1,
+    symbolTheme: 'classic'
   };
 
   private timer: Timer;
@@ -270,6 +272,7 @@ export class Game implements InputHandler {
   private centerMinScale = BASE_CENTER_SCALE * CENTER_MIN_RATIO;
   private centerScale = BASE_CENTER_SCALE;
   private symbolStrokeScale = 1;
+  private symbolTheme: SymbolTheme = 'classic';
   private centerOpacity = 1;
   private playfieldCenter = { x: 0, y: 0 };
   private lastRingCenter = { x: 0, y: 0 };
@@ -339,7 +342,7 @@ export class Game implements InputHandler {
     this.timer = new Timer(this.config.duration, this.time);
     this.input = new InputManager();
     this.effects = new EffectsManager();
-    this.audio = new AudioManager();
+    this.audio = new AudioSystem();
     this.config = { ...this.defaults };
     if (typeof window !== 'undefined' && 'localStorage' in window) {
       this.highscoreStore = new HighscoreStore();
@@ -377,8 +380,40 @@ export class Game implements InputHandler {
     ]);
   }
 
+  private getThemeSymbolSet(): SymbolType[] {
+    return SYMBOL_THEME_SETS[this.symbolTheme] ?? SYMBOL_THEME_SETS.classic;
+  }
+
+  private applySymbolTheme(theme: SymbolTheme) {
+    if (this.symbolTheme === theme) {
+      this.symbolTheme = theme;
+      return;
+    }
+    this.symbolTheme = theme;
+    const order = this.getThemeSymbolSet();
+    if (order.length === 0) {
+      return;
+    }
+    if (this.symbols.length > 0) {
+      this.symbols.forEach((symbol, index) => {
+        symbol.type = order[index % order.length] ?? symbol.type;
+        symbol.scale = this.ringSymbolScale;
+        symbol.rotation = this.ringRotationOffset;
+      });
+      const nextCenter = order[this.currentTargetIndex % order.length] ?? order[0];
+      this.applyCenterSymbol(nextCenter, { resetVisual: false });
+      if (this.activeMechanics.includes('remap')) {
+        this.rollRemapMapping();
+      } else {
+        this.remapMapping = null;
+      }
+      this.updateRingLayout();
+    } else {
+      this.centerSymbol = order[0];
+    }
+  }
   private getRandomSymbolType(...excludes: (SymbolType | undefined)[]): SymbolType {
-    const pool = (this.symbols.length > 0 ? this.symbols.map((s) => s.type) : RING_SYMBOL_TYPES);
+    const pool = this.symbols.length > 0 ? this.symbols.map((s) => s.type) : [...this.getThemeSymbolSet()];
     const excludeSet = new Set<SymbolType>(excludes.filter((x): x is SymbolType => !!x));
     const filtered = pool.filter((type) => !excludeSet.has(type));
     const candidates = filtered.length > 0 ? filtered : pool;
@@ -435,14 +470,16 @@ export class Game implements InputHandler {
   private applyDefaultRingOrder() {
     if (this.symbols.length === 0) return;
     this.ringRotationOffset = 0;
-      RING_SYMBOL_TYPES.forEach((type, index) => {
-        const symbol = this.symbols[index];
-        if (symbol) {
-          symbol.type = type;
-          symbol.scale = this.ringSymbolScale;
-          symbol.rotation = 0;
-        }
-      });
+    const order = this.getThemeSymbolSet();
+    if (order.length === 0) {
+      return;
+    }
+    this.symbols.forEach((symbol, index) => {
+      const type = order[index % order.length] ?? symbol.type;
+      symbol.type = type;
+      symbol.scale = this.ringSymbolScale;
+      symbol.rotation = 0;
+    });
     this.updateRingLayout();
   }
 
@@ -532,7 +569,7 @@ export class Game implements InputHandler {
   }
 
   private rollRemapMapping() {
-    const availableSet = this.symbols.length > 0 ? this.symbols.map((s) => s.type) : [...RING_SYMBOL_TYPES];
+    const availableSet = this.symbols.length > 0 ? this.symbols.map((s) => s.type) : [...this.getThemeSymbolSet()];
     const uniqueAvailable = Array.from(new Set(availableSet));
     if (uniqueAvailable.length < 2) {
       this.remapMapping = null;
@@ -942,6 +979,7 @@ export class Game implements InputHandler {
       particlesEnabled?: boolean;
       scoreRayEnabled?: boolean;
     };
+    const themeSetting: SymbolTheme = data.symbolTheme === 'pacman' ? 'pacman' : 'classic';
     const merged: GameConfig = {
       ...this.defaults,
       duration: clamp(data.initialTime ?? this.defaults.duration, 15, 300),
@@ -952,7 +990,8 @@ export class Game implements InputHandler {
       bonusWindow: clamp(data.bonusWindow ?? this.defaults.bonusWindow, 0.5, 6),
       ringRadiusFactor: clamp(data.ringRadiusFactor ?? this.defaults.ringRadiusFactor, 0.08, 0.3),
       symbolScale: clamp(data.symbolScale ?? this.defaults.symbolScale, 0.6, 1.6),
-      symbolStroke: clamp(data.symbolStroke ?? this.defaults.symbolStroke, 0.5, 1.8)
+      symbolStroke: clamp(data.symbolStroke ?? this.defaults.symbolStroke, 0.5, 1.8),
+      symbolTheme: themeSetting
     };
     // Ensure floor is not above ceiling
     if (merged.minTimeBonus > merged.maxTimeBonus) {
@@ -965,6 +1004,7 @@ export class Game implements InputHandler {
     this.centerMinScale = this.centerBaseScale * CENTER_MIN_RATIO;
     this.centerScale = this.centerBaseScale;
     this.symbolStrokeScale = merged.symbolStroke;
+    this.applySymbolTheme(themeSetting);
 
     if (this.symbols.length > 0) {
       this.symbols.forEach((symbol) => {
@@ -1506,9 +1546,10 @@ export class Game implements InputHandler {
 
   private initSymbols() {
     const positions = this.computeRingPositions(0);
-    const baseTypes = RING_SYMBOL_TYPES.slice(0, positions.length);
+    const themeOrder = this.getThemeSymbolSet();
+    const baseTypes = (themeOrder.length > 0 ? themeOrder : SYMBOL_THEME_SETS.classic).slice(0, positions.length);
     this.symbols = positions.map((pos, index) => ({
-      type: baseTypes[index % baseTypes.length],
+      type: baseTypes[index % baseTypes.length] ?? (themeOrder[0] ?? SYMBOL_THEME_SETS.classic[0]),
       x: pos.x,
       y: pos.y,
       scale: this.ringSymbolScale,
@@ -2476,3 +2517,4 @@ export class Game implements InputHandler {
   pauseLayer() { this.time.pauseLayer(); }
   resumeLayer() { this.time.resumeLayer(); }
 }
+
