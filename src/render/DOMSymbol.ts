@@ -1,3 +1,4 @@
+import { arePacmanEyesEnabled } from './Symbols';
 import type { SymbolType } from './Symbols';
 
 export interface SymbolProps {
@@ -29,7 +30,10 @@ export class DOMSymbol {
     this.element.style.top = `${y}px`;
 
     // Update symbol type and target state
-    this.element.className = 'symbol ' + type;
+    const eyesEnabled = arePacmanEyesEnabled();
+    const isPacmanFamily = type === 'pacman' || type.startsWith('ghost-');
+    const classBase = 'symbol ' + type + (!eyesEnabled && isPacmanFamily ? ' no-eyes' : '');
+    this.element.className = classBase;
     if (isTarget) {
       this.element.classList.add('target');
     } else {

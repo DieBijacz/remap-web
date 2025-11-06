@@ -1,8 +1,8 @@
-﻿import { Clock, PausableTime } from '../core/Clock';
+import { Clock, PausableTime } from '../core/Clock';
 import { Renderer2D } from '../render/Renderer2D';
 import { AnimationTimeline, easeOutCubic } from '../core/Animation';
 import { Timer } from '../core/Timer';
-import { drawSymbol, SYMBOL_PALETTES, SYMBOL_THEME_SETS } from '../render/Symbols';
+import { drawSymbol, SYMBOL_PALETTES, SYMBOL_THEME_SETS, setPacmanEyesEnabled } from '../render/Symbols';
 import type { Symbol, SymbolType, SymbolTheme } from '../render/Symbols';
 import type { InputHandler } from '../input/InputManager';
 import { InputManager } from '../input/InputManager';
@@ -220,6 +220,7 @@ interface GameConfig {
   symbolScale: number;
   symbolStroke: number;
   symbolTheme: SymbolTheme;
+  pacmanEyes: boolean;
 }
 
 export class Game implements InputHandler {
@@ -245,7 +246,8 @@ export class Game implements InputHandler {
     ringRadiusFactor: 0.15,
     symbolScale: 1,
     symbolStroke: 1,
-    symbolTheme: 'classic'
+    symbolTheme: 'classic',
+    pacmanEyes: true,
   };
   private timeDeltaValue = 0;
   private timeDeltaTimer = 0;
@@ -259,7 +261,8 @@ export class Game implements InputHandler {
     ringRadiusFactor: 0.15,
     symbolScale: 1,
     symbolStroke: 1,
-    symbolTheme: 'classic'
+    symbolTheme: 'classic',
+    pacmanEyes: true,
   };
 
   private timer: Timer;
@@ -385,10 +388,6 @@ export class Game implements InputHandler {
   }
 
   private applySymbolTheme(theme: SymbolTheme) {
-    if (this.symbolTheme === theme) {
-      this.symbolTheme = theme;
-      return;
-    }
     this.symbolTheme = theme;
     const order = this.getThemeSymbolSet();
     if (order.length === 0) {
@@ -980,6 +979,7 @@ export class Game implements InputHandler {
       scoreRayEnabled?: boolean;
     };
     const themeSetting: SymbolTheme = data.symbolTheme === 'pacman' ? 'pacman' : 'classic';
+    const pacmanEyesEnabled = data.pacmanEyes !== false;
     const merged: GameConfig = {
       ...this.defaults,
       duration: clamp(data.initialTime ?? this.defaults.duration, 15, 300),
@@ -991,7 +991,8 @@ export class Game implements InputHandler {
       ringRadiusFactor: clamp(data.ringRadiusFactor ?? this.defaults.ringRadiusFactor, 0.08, 0.3),
       symbolScale: clamp(data.symbolScale ?? this.defaults.symbolScale, 0.6, 1.6),
       symbolStroke: clamp(data.symbolStroke ?? this.defaults.symbolStroke, 0.5, 1.8),
-      symbolTheme: themeSetting
+      symbolTheme: themeSetting,
+      pacmanEyes: pacmanEyesEnabled,
     };
     // Ensure floor is not above ceiling
     if (merged.minTimeBonus > merged.maxTimeBonus) {
@@ -1004,6 +1005,7 @@ export class Game implements InputHandler {
     this.centerMinScale = this.centerBaseScale * CENTER_MIN_RATIO;
     this.centerScale = this.centerBaseScale;
     this.symbolStrokeScale = merged.symbolStroke;
+    setPacmanEyesEnabled(pacmanEyesEnabled);
     this.applySymbolTheme(themeSetting);
 
     if (this.symbols.length > 0) {
@@ -2034,12 +2036,12 @@ export class Game implements InputHandler {
     if (descriptorTokens.length === 0) {
       if (bannerText) descriptorLines = [bannerText];
     } else if (descriptorTokens.length <= 2) {
-      descriptorLines = [descriptorTokens.join('  •  ')];
+      descriptorLines = [descriptorTokens.join('  â€¢  ')];
     } else {
       const maxLines = Math.min(3, Math.ceil(descriptorTokens.length / 2));
       const perLine = Math.ceil(descriptorTokens.length / maxLines);
       for (let i = 0; i < descriptorTokens.length; i += perLine) {
-        descriptorLines.push(descriptorTokens.slice(i, i + perLine).join('  •  '));
+        descriptorLines.push(descriptorTokens.slice(i, i + perLine).join('  â€¢  '));
       }
     }
 

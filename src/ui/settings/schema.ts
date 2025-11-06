@@ -158,6 +158,12 @@ export const SETTINGS_TABS: SettingsTab[] = [
         format: (value) => (value === 'pacman' ? 'Pac-Man' : 'Classic')
       },
       {
+        type: 'toggle',
+        key: 'pacmanEyes',
+        label: 'Pac-Man Eyes',
+        format: (value) => (value === false ? 'Hidden' : 'Visible')
+      },
+      {
         type: 'number',
         key: 'symbolScale',
         label: 'Symbol Size',

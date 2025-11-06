@@ -75,6 +75,7 @@ export class App {
     const persistedParticlesPerScore = particlesEnabled === false ? 0 : persistedConfig.particlesPerScore ?? 4;
     const persistedScoreRayCount = scoreRayEnabled === false ? 0 : persistedConfig.scoreRayCount ?? 3;
     const persistedSymbolTheme = persistedConfig.symbolTheme === 'pacman' ? 'pacman' : 'classic';
+    const persistedPacmanEyes = persistedConfig.pacmanEyes !== false;
     const nameEntryModeDefault = persistedConfig.nameEntryMode === 'keyboard' ? 'keyboard' : 'slots';
 
     const settingsValues: PersistentConfig = {
@@ -91,6 +92,7 @@ export class App {
       symbolScale: persistedConfig.symbolScale ?? 1,
       symbolStroke: persistedConfig.symbolStroke ?? 1,
       symbolTheme: persistedSymbolTheme,
+      pacmanEyes: persistedPacmanEyes,
       uiFontScale: persistedConfig.uiFontScale ?? 0.9,
       particlesPerScore: persistedParticlesPerScore,
       particlesPersist: persistedConfig.particlesPersist ?? false,

@@ -31,6 +31,14 @@ export const SYMBOL_THEME_SETS: Record<SymbolTheme, SymbolType[]> = {
   pacman: ['pacman', 'ghost-pink', 'ghost-blue', 'ghost-orange']
 };
 
+let pacmanEyesEnabled = true;
+
+export const setPacmanEyesEnabled = (enabled: boolean) => {
+  pacmanEyesEnabled = enabled;
+};
+
+export const arePacmanEyesEnabled = () => pacmanEyesEnabled;
+
 export const SYMBOL_PALETTES: Record<SymbolType, { glow: string; inner: string; ambient: string }> = {
   square: { glow: '#ffd95a', inner: '#fff9e6', ambient: 'rgba(255, 217, 90, 0.35)' },
   circle: { glow: '#ff63c0', inner: '#ffe6f8', ambient: 'rgba(255, 99, 192, 0.32)' },
@@ -120,6 +128,7 @@ export const drawSymbol = (
   const size = 46 * scale;
   const isGhost = isGhostType(type);
   const isPacman = type === 'pacman';
+  const showEyes = pacmanEyesEnabled && (isGhost || isPacman);
   const glowLine = size * (type === 'cross' ? 0.1 : isGhost ? 0.088 : 0.09) * strokeScale;
   const innerLine = size * (type === 'cross' ? 0.06 : isGhost ? 0.05 : 0.048) * strokeScale;
   const glowBoost = Math.max(0.6, Math.min(1.6, strokeScale));
@@ -170,7 +179,7 @@ export const drawSymbol = (
   ctx.globalAlpha = 1;
   ctx.stroke();
 
-  if (isPacman) {
+  if (showEyes && isPacman) {
     ctx.save();
     ctx.shadowBlur = size * 0.08;
     ctx.shadowColor = 'rgba(255, 246, 210, 0.6)';
@@ -183,7 +192,7 @@ export const drawSymbol = (
     ctx.arc(size * 0.16, -size * 0.16, size * 0.035, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
-  } else if (isGhost) {
+  } else if (showEyes && isGhost) {
     ctx.save();
     const eyeOffsetY = -size * 0.12;
     const eyeSpacing = size * 0.26;
@@ -208,3 +217,4 @@ export const drawSymbol = (
 
   ctx.restore();
 };
+
