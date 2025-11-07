@@ -31,14 +31,6 @@ export const SYMBOL_THEME_SETS: Record<SymbolTheme, SymbolType[]> = {
   pacman: ['pacman', 'ghost-pink', 'ghost-blue', 'ghost-orange']
 };
 
-let pacmanEyesEnabled = true;
-
-export const setPacmanEyesEnabled = (enabled: boolean) => {
-  pacmanEyesEnabled = enabled;
-};
-
-export const arePacmanEyesEnabled = () => pacmanEyesEnabled;
-
 export const SYMBOL_PALETTES: Record<SymbolType, { glow: string; inner: string; ambient: string }> = {
   square: { glow: '#ffd95a', inner: '#fff9e6', ambient: 'rgba(255, 217, 90, 0.35)' },
   circle: { glow: '#ff63c0', inner: '#ffe6f8', ambient: 'rgba(255, 99, 192, 0.32)' },
@@ -128,7 +120,6 @@ export const drawSymbol = (
   const size = 46 * scale;
   const isGhost = isGhostType(type);
   const isPacman = type === 'pacman';
-  const showEyes = pacmanEyesEnabled && (isGhost || isPacman);
   const glowLine = size * (type === 'cross' ? 0.1 : isGhost ? 0.088 : 0.09) * strokeScale;
   const innerLine = size * (type === 'cross' ? 0.06 : isGhost ? 0.05 : 0.048) * strokeScale;
   const glowBoost = Math.max(0.6, Math.min(1.6, strokeScale));
@@ -178,42 +169,6 @@ export const drawSymbol = (
   ctx.shadowBlur = isTarget ? (isGhost || isPacman ? 26 : 22) : isGhost || isPacman ? 18 : 14;
   ctx.globalAlpha = 1;
   ctx.stroke();
-
-  if (showEyes && isPacman) {
-    ctx.save();
-    ctx.shadowBlur = size * 0.08;
-    ctx.shadowColor = 'rgba(255, 246, 210, 0.6)';
-    ctx.fillStyle = 'rgba(255, 251, 230, 0.9)';
-    ctx.beginPath();
-    ctx.arc(size * 0.12, -size * 0.16, size * 0.055, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#0b1120';
-    ctx.beginPath();
-    ctx.arc(size * 0.16, -size * 0.16, size * 0.035, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  } else if (showEyes && isGhost) {
-    ctx.save();
-    const eyeOffsetY = -size * 0.12;
-    const eyeSpacing = size * 0.26;
-    const eyeRadius = size * 0.12;
-    const pupilRadius = eyeRadius * 0.45;
-    const pupilOffset = eyeRadius * 0.28;
-    ctx.shadowBlur = size * 0.1;
-    ctx.shadowColor = 'rgba(255,255,255,0.55)';
-    const positions = [-eyeSpacing / 2, eyeSpacing / 2];
-    positions.forEach((cx) => {
-      ctx.fillStyle = '#f7fbff';
-      ctx.beginPath();
-      ctx.arc(cx, eyeOffsetY, eyeRadius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#0c152a';
-      ctx.beginPath();
-      ctx.arc(cx + pupilOffset, eyeOffsetY, pupilRadius, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.restore();
-  }
 
   ctx.restore();
 };

@@ -1,5 +1,6 @@
 import type { Config as PersistentConfig } from '../../storage/ConfigStore';
-import { clearCanvas, drawButton, fillRoundedRect, pointInRect } from '../canvasUtils';
+import type { Action } from '../../input/Keymap';
+import { clearCanvas, drawButton, fillRoundedRect, pointInRect, strokeRoundedRect } from '../canvasUtils';
 import { SETTINGS_TABS, type SettingItem, type SettingsTab } from './schema';
 
 type SettingsScreenOptions = {
@@ -15,6 +16,7 @@ export class SettingsScreen {
   private values: PersistentConfig;
   private currentTabIndex = 0;
   private selectionIndex: number;
+  private tabFocus = false;
   private message: string | null = null;
   private backButtonRect: DOMRect | null = null;
   private tabButtonRects: DOMRect[] = [];
@@ -36,6 +38,7 @@ export class SettingsScreen {
 
   enter() {
     this.message = null;
+    this.tabFocus = false;
     this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
     this.draw();
   }
@@ -79,14 +82,24 @@ export class SettingsScreen {
       const tabX = tabCursorX;
       const tabY = tabCenterY - metric.height / 2;
       const isActive = idx === this.currentTabIndex;
+      const isFocusedTab = isActive && this.tabFocus;
       const radius = Math.min(20, metric.height / 2);
-      ctx.fillStyle = isActive ? 'rgba(34, 197, 94, 0.24)' : 'rgba(148, 163, 184, 0.14)';
+      ctx.fillStyle = isFocusedTab
+        ? 'rgba(126, 231, 135, 0.4)'
+        : isActive
+          ? 'rgba(34, 197, 94, 0.24)'
+          : 'rgba(148, 163, 184, 0.14)';
       fillRoundedRect(ctx, tabX, tabY, metric.width, metric.height, radius);
-      ctx.fillStyle = isActive ? '#7ee787' : '#94a3b8';
+      ctx.fillStyle = isFocusedTab ? '#f8fafc' : isActive ? '#7ee787' : '#94a3b8';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.font = `${tabFontSize}px Orbitron, sans-serif`;
       ctx.fillText(tab.label, tabX + metric.width / 2, tabCenterY);
+      if (isFocusedTab) {
+        ctx.strokeStyle = 'rgba(126, 231, 135, 0.9)';
+        ctx.lineWidth = 2;
+        strokeRoundedRect(ctx, tabX + 2, tabY + 2, metric.width - 4, metric.height - 4, radius);
+      }
       this.tabButtonRects[idx] = new DOMRect(tabX, tabY, metric.width, metric.height);
       tabCursorX += metric.width + tabSpacing;
     });
@@ -175,73 +188,103 @@ export class SettingsScreen {
     ctx.font = `${Math.max(9, Math.round(cssH * 0.02 * fontScale))}px Orbitron, sans-serif`;
     ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
     ctx.fillText(
-      'Press O to toggle options. Q/E tabs, UP/DOWN select, LEFT/RIGHT adjust, Enter confirm, Esc exit',
+      'Arrows move and adjust - Press UP on the first row to focus tabs - Enter toggles - O hides settings',
       cssW / 2,
       btnY - Math.max(24, Math.round(cssH * 0.06))
     );
     ctx.restore();
   }
 
-  handleKey(e: KeyboardEvent) {
+  handleAction(action: Action): boolean {
     const items = this.getCurrentTab().items;
     const option = items[this.selectionIndex];
-    switch (e.key) {
-      case 'ArrowDown':
+    switch (action) {
+      case 'down':
+        if (this.tabFocus) {
+          if (this.tabHasSelectableSettings(this.currentTabIndex)) {
+            this.tabFocus = false;
+            this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+            this.draw();
+          }
+          return false;
+        }
         this.moveSelection(1);
-        e.preventDefault();
-        break;
-      case 'ArrowUp':
+        return false;
+      case 'up': {
+        if (this.tabFocus) {
+          return false;
+        }
+        if (!this.tabHasSelectableSettings(this.currentTabIndex)) {
+          this.tabFocus = true;
+          this.draw();
+          return false;
+        }
+        const first = this.getFirstSelectableIndex(this.currentTabIndex);
+        if (this.selectionIndex === first) {
+          this.tabFocus = true;
+          this.draw();
+          return false;
+        }
         this.moveSelection(-1);
-        e.preventDefault();
-        break;
-      case 'ArrowLeft':
-        if (option?.type === 'number') {
-          this.adjustNumberSetting(option, -1);
-          e.preventDefault();
-        } else if (option?.type === 'toggle') {
-          this.toggleSetting(option);
-          e.preventDefault();
-        } else if (option?.type === 'cycle') {
-          this.cycleOption(option, -1);
-          e.preventDefault();
+        return false;
+      }
+      case 'left':
+        if (this.tabFocus) {
+          this.changeTab(-1, { focusMode: 'tabs' });
+        } else {
+          this.adjustOption(option, -1);
         }
-        break;
-      case 'ArrowRight':
-        if (option?.type === 'number') {
-          this.adjustNumberSetting(option, +1);
-          e.preventDefault();
-        } else if (option?.type === 'toggle') {
-          this.toggleSetting(option);
-          e.preventDefault();
-        } else if (option?.type === 'cycle') {
-          this.cycleOption(option, +1);
-          e.preventDefault();
+        return false;
+      case 'right':
+        if (this.tabFocus) {
+          this.changeTab(1, { focusMode: 'tabs' });
+        } else {
+          this.adjustOption(option, 1);
         }
-        break;
-      case 'Enter':
+        return false;
+      case 'confirm':
+        if (this.tabFocus) {
+          if (this.tabHasSelectableSettings(this.currentTabIndex)) {
+            this.tabFocus = false;
+            this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+            this.draw();
+          }
+          return false;
+        }
         if (option?.type === 'action') {
           this.triggerAction(option);
-          e.preventDefault();
         } else if (option?.type === 'toggle') {
           this.toggleSetting(option);
-          e.preventDefault();
         }
-        break;
-      case 'q':
-      case 'Q':
-        this.changeTab(-1);
-        e.preventDefault();
-        break;
-      case 'e':
-      case 'E':
-        this.changeTab(1);
-        e.preventDefault();
-        break;
-      case 'Escape':
-        e.preventDefault();
+        return false;
+      case 'cancel':
         return true;
       default:
-        break;
+        return false;
+    }
+  }
+
+  handleKey(e: KeyboardEvent) {
+    const map: Record<string, Action | null> = {
+      ArrowUp: 'up',
+      ArrowDown: 'down',
+      ArrowLeft: 'left',
+      ArrowRight: 'right',
+      Enter: 'confirm',
+      Escape: 'cancel'
+    };
+    const action = map[e.key] ?? null;
+    if (action) {
+      const exit = this.handleAction(action);
+      e.preventDefault();
+      return exit;
+    }
+    if (e.key === 'q' || e.key === 'Q') {
+      this.changeTab(-1, { focusMode: 'tabs' });
+      e.preventDefault();
+    } else if (e.key === 'e' || e.key === 'E') {
+      this.changeTab(1, { focusMode: 'tabs' });
+      e.preventDefault();
     }
     return false;
   }
@@ -249,7 +292,7 @@ export class SettingsScreen {
   handleClick(x: number, y: number) {
     const tabIdx = this.tabButtonRects.findIndex((rect) => pointInRect(x, y, rect));
     if (tabIdx !== -1) {
-      this.selectTab(tabIdx);
+      this.selectTab(tabIdx, { focusMode: 'content' });
       return false;
     }
     if (pointInRect(x, y, this.backButtonRect)) {
@@ -267,6 +310,17 @@ export class SettingsScreen {
     this.options.onChange(this.values);
     this.message = null;
     this.draw();
+  }
+
+  private adjustOption(option: SettingItem | undefined, direction: number) {
+    if (!option) return;
+    if (option.type === 'number') {
+      this.adjustNumberSetting(option, direction);
+    } else if (option.type === 'toggle') {
+      this.toggleSetting(option);
+    } else if (option.type === 'cycle') {
+      this.cycleOption(option, direction);
+    }
   }
 
   private adjustNumberSetting(option: Extract<SettingItem, { type: 'number' }>, direction: number) {
@@ -313,6 +367,7 @@ export class SettingsScreen {
     if (items.length === 0 || !this.tabHasSelectableSettings(this.currentTabIndex)) {
       return;
     }
+    this.tabFocus = false;
     let next = this.selectionIndex;
     for (let i = 0; i < items.length; i += 1) {
       next = (next + delta + items.length) % items.length;
@@ -324,12 +379,12 @@ export class SettingsScreen {
     }
   }
 
-  private changeTab(delta: number) {
+  private changeTab(delta: number, options?: { focusMode?: 'tabs' | 'content' }) {
     if (SETTINGS_TABS.length <= 1) return;
-    this.selectTab(this.currentTabIndex + delta);
+    this.selectTab(this.currentTabIndex + delta, options);
   }
 
-  private selectTab(index: number) {
+  private selectTab(index: number, options?: { focusMode?: 'tabs' | 'content' }) {
     if (SETTINGS_TABS.length === 0) return;
     const normalized = ((index % SETTINGS_TABS.length) + SETTINGS_TABS.length) % SETTINGS_TABS.length;
     this.currentTabIndex = normalized;
@@ -339,6 +394,13 @@ export class SettingsScreen {
     } else {
       const first = this.getFirstSelectableIndex(normalized);
       this.selectionIndex = first < items.length ? first : 0;
+    }
+    if (options?.focusMode === 'tabs') {
+      this.tabFocus = true;
+    } else if (options?.focusMode === 'content') {
+      this.tabFocus = false;
+    } else if (!this.tabHasSelectableSettings(normalized)) {
+      this.tabFocus = true;
     }
     this.message = null;
     this.draw();

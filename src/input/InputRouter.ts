@@ -1,6 +1,6 @@
-import keymap from './Keymap';
+import keymap, { type Action } from './Keymap';
 
-export type ActionHandler = (action: string, event?: KeyboardEvent) => void;
+export type ActionHandler = (action: Action, event?: KeyboardEvent) => void;
 
 export default class InputRouter {
   private handler: ActionHandler;
@@ -14,11 +14,12 @@ export default class InputRouter {
   }
 
   private onKey(e: KeyboardEvent) {
-    const action = keymap[e.code] ?? (keymap[e.key] as any);
-    if (action) {
-      this.handler(action, e);
-      e.preventDefault();
+    const action = (keymap[e.code] ?? keymap[e.key]) as Action | undefined;
+    if (!action) {
+      return;
     }
+    this.handler(action, e);
+    e.preventDefault();
   }
 
   destroy() {

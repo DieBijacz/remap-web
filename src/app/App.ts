@@ -1,13 +1,12 @@
 import { Game, type GameCompletionSummary } from '../game/Game';
 import { GameState, GameStateManager } from '../core/GameStateManager';
+import InputRouter from '../input/InputRouter';
+import type { Action } from '../input/Keymap';
 import ConfigStore, { type Config as PersistentConfig } from '../storage/ConfigStore';
-import type { HighscoreEntry } from '../storage/HighscoreStore';
 import { MenuScreen } from '../ui/menu/MenuScreen';
 import { LeaderboardScreen, type LeaderboardScreenData } from '../ui/leaderboard/LeaderboardScreen';
 import { SettingsScreen } from '../ui/settings/SettingsScreen';
 import { clearCanvas } from '../ui/canvasUtils';
-
-const LEADERBOARD_LIMIT = 10;
 
 export class App {
   private readonly canvas: HTMLCanvasElement;
@@ -18,6 +17,8 @@ export class App {
   private readonly menuScreen: MenuScreen;
   private readonly leaderboardScreen: LeaderboardScreen;
   private readonly settingsScreen: SettingsScreen;
+  private readonly inputRouter: InputRouter;
+  private settingsPausedGame = false;
 
   private settingsValues: PersistentConfig;
   private leaderboardData: LeaderboardScreenData = {
@@ -53,6 +54,9 @@ export class App {
       onResetHighscore: () => this.handleResetHighscore()
     });
 
+    this.inputRouter = new InputRouter((action, event) => this.handleAction(action, event));
+    window.addEventListener('beforeunload', () => this.inputRouter.destroy());
+
     this.attachGameHandlers();
     this.attachInputHandlers();
     this.stateManager.onChange((state) => this.handleStateChange(state));
@@ -75,7 +79,6 @@ export class App {
     const persistedParticlesPerScore = particlesEnabled === false ? 0 : persistedConfig.particlesPerScore ?? 4;
     const persistedScoreRayCount = scoreRayEnabled === false ? 0 : persistedConfig.scoreRayCount ?? 3;
     const persistedSymbolTheme = persistedConfig.symbolTheme === 'pacman' ? 'pacman' : 'classic';
-    const persistedPacmanEyes = persistedConfig.pacmanEyes !== false;
     const nameEntryModeDefault = persistedConfig.nameEntryMode === 'keyboard' ? 'keyboard' : 'slots';
 
     const settingsValues: PersistentConfig = {
@@ -92,7 +95,6 @@ export class App {
       symbolScale: persistedConfig.symbolScale ?? 1,
       symbolStroke: persistedConfig.symbolStroke ?? 1,
       symbolTheme: persistedSymbolTheme,
-      pacmanEyes: persistedPacmanEyes,
       uiFontScale: persistedConfig.uiFontScale ?? 0.9,
       particlesPerScore: persistedParticlesPerScore,
       particlesPersist: persistedConfig.particlesPersist ?? false,
@@ -120,8 +122,6 @@ export class App {
       const y = event.clientY - rect.top;
       this.handleCanvasClick(x, y);
     });
-
-    document.addEventListener('keydown', (event) => this.handleDocumentKey(event));
   }
 
   private handleStateChange(state: GameState) {
@@ -150,12 +150,7 @@ export class App {
     const state = this.stateManager.getCurrentState();
     if (state === GameState.MENU) {
       const handled = this.menuScreen.handleClick(x, y, {
-        onStart: () => {
-          this.stateManager.showState(GameState.GAME);
-          this.game.start();
-        },
-        onShowLeaderboard: () => this.showLeaderboardFromMenu(),
-        onShowSettings: () => this.enterSettings(GameState.MENU)
+        onStart: () => this.startGameFromMenu()
       });
       if (handled) {
         return;
@@ -173,34 +168,53 @@ export class App {
     }
   }
 
-  private handleDocumentKey(event: KeyboardEvent) {
+  private handleAction(action: Action, event?: KeyboardEvent) {
     const state = this.stateManager.getCurrentState();
 
-    if (event.key === 'o' || event.key === 'O') {
+    if (action === 'settings') {
       if (state === GameState.SETTINGS) {
         this.exitSettings();
       } else {
         this.enterSettings(state);
       }
-      event.preventDefault();
+      event?.preventDefault();
       return;
     }
 
     if (state === GameState.SETTINGS) {
-      const exit = this.settingsScreen.handleKey(event);
+      const exit = this.settingsScreen.handleAction(action);
       if (exit) {
         this.exitSettings();
       }
+      event?.preventDefault();
       return;
     }
 
     if (state === GameState.LEADERBOARD) {
-      const exit = this.leaderboardScreen.handleKey(event);
+      const exit = this.leaderboardScreen.handleAction(action);
       if (exit) {
         this.closeLeaderboard();
       }
+      event?.preventDefault();
       return;
     }
+
+    if (state === GameState.MENU) {
+      const handled = this.menuScreen.handleAction(action, {
+        onStart: () => this.startGameFromMenu()
+      });
+      if (handled) {
+        event?.preventDefault();
+      }
+      return;
+    }
+  }
+
+  private startGameFromMenu() {
+    if (this.stateManager.getCurrentState() !== GameState.GAME) {
+      this.stateManager.showState(GameState.GAME);
+    }
+    this.game.start();
   }
 
   private enterSettings(fromState: GameState) {
@@ -208,16 +222,27 @@ export class App {
       return;
     }
     this.settingsReturnState = fromState;
+    if (fromState === GameState.GAME) {
+      this.game.pauseLayer();
+      this.settingsPausedGame = true;
+    } else {
+      this.settingsPausedGame = false;
+    }
     this.stateManager.showState(GameState.SETTINGS);
   }
 
   private exitSettings() {
     if (this.stateManager.getCurrentState() !== GameState.SETTINGS) {
       this.settingsReturnState = null;
+      this.settingsPausedGame = false;
       return;
     }
     const nextState = this.settingsReturnState ?? GameState.MENU;
     this.settingsReturnState = null;
+    if (this.settingsPausedGame) {
+      this.game.resumeLayer();
+      this.settingsPausedGame = false;
+    }
     this.stateManager.showState(nextState);
   }
 
@@ -254,19 +279,6 @@ export class App {
     this.stateManager.showState(GameState.LEADERBOARD);
   }
 
-  private showLeaderboardFromMenu() {
-    const snapshot = this.game.getLeaderboardSnapshot?.();
-    const entries = Array.isArray(snapshot) ? snapshot : [];
-    this.leaderboardData = {
-      entries: entries.slice(0, LEADERBOARD_LIMIT) as HighscoreEntry[],
-      highlightIndex: null,
-      finalScore: 0,
-      playerName: null,
-      fromGame: false,
-      didQualify: false
-    };
-    this.stateManager.showState(GameState.LEADERBOARD);
-  }
 }
 
 export function createApp(canvas: HTMLCanvasElement) {

@@ -5,7 +5,8 @@ export type Action =
   | 'right'
   | 'confirm'
   | 'cancel'
-  | 'pause';
+  | 'pause'
+  | 'settings';
 
 const defaultKeymap: Record<string, Action> = {
   ArrowUp: 'up',
@@ -13,9 +14,13 @@ const defaultKeymap: Record<string, Action> = {
   ArrowLeft: 'left',
   ArrowRight: 'right',
   Enter: 'confirm',
+  NumpadEnter: 'confirm',
   Escape: 'cancel',
   Space: 'confirm',
   KeyP: 'pause',
+  KeyO: 'settings',
+  o: 'settings',
+  O: 'settings'
 };
 
 export default defaultKeymap;

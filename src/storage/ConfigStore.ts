@@ -26,7 +26,6 @@ export type Config = {
   mechanicEnableJoystick?: boolean;
   nameEntryMode?: 'slots' | 'keyboard';
   symbolTheme?: 'classic' | 'pacman';
-  pacmanEyes?: boolean;
 };
 
 export default class ConfigStore {

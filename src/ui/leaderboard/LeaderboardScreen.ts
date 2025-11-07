@@ -1,3 +1,4 @@
+import type { Action } from '../../input/Keymap';
 import { clearCanvas, fillRoundedRect, strokeRoundedRect } from '../canvasUtils';
 import type { HighscoreEntry } from '../../storage/HighscoreStore';
 
@@ -191,14 +192,31 @@ export class LeaderboardScreen {
     }
   }
 
-  handleKey(e: KeyboardEvent) {
-    if (['ArrowUp', 'ArrowRight', 'ArrowDown', 'ArrowLeft'].includes(e.key)) {
-      e.preventDefault();
+  handleAction(action: Action): boolean {
+    if (action === 'confirm' || action === 'cancel') {
+      return true;
+    }
+    if (action === 'up' || action === 'down' || action === 'left' || action === 'right') {
       return false;
     }
-    if (['Enter', 'Escape', ' '].includes(e.key)) {
+    return false;
+  }
+
+  handleKey(e: KeyboardEvent): boolean {
+    const keyMap: Record<string, Action | null> = {
+      ArrowUp: 'up',
+      ArrowRight: 'right',
+      ArrowDown: 'down',
+      ArrowLeft: 'left',
+      Enter: 'confirm',
+      Escape: 'cancel',
+      ' ': 'confirm'
+    };
+    const action = keyMap[e.key] ?? null;
+    if (action) {
+      const exit = this.handleAction(action);
       e.preventDefault();
-      return true;
+      return exit;
     }
     return false;
   }
