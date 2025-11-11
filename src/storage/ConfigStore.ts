@@ -10,6 +10,9 @@ export type Config = {
   bonusWindow?: number;
   ringRadiusFactor?: number;
   menuSymbolCount?: number;
+  menuSymbolBaseSizeVW?: number;
+  menuSymbolSizeVariancePct?: number;
+  menuSymbolGrowthMultiplier?: number;
   minTimeBonus?: number;
   mechanicInterval?: number;
   difficulty?: 'easy' | 'medium' | 'hard' | 'progressive';

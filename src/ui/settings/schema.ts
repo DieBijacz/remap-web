@@ -195,17 +195,44 @@ export const SETTINGS_TABS: SettingsTab[] = [
               },
               {
                 type: 'label',
-                label: 'Animated Menu'
-              },
-              {
-                type: 'number',
-                key: 'menuSymbolCount',
-                label: 'Menu Symbols',
-                min: 4,
-                max: 60,
-                step: 1,
-                format: (v) => `${Math.round(v)}`
-              },
+            label: 'Animated Menu'
+          },
+          {
+            type: 'number',
+            key: 'menuSymbolCount',
+            label: 'Menu Symbols',
+            min: 4,
+            max: 60,
+            step: 1,
+            format: (v) => `${Math.round(v)}`
+          },
+          {
+            type: 'number',
+            key: 'menuSymbolBaseSizeVW',
+            label: 'Animation Base Size',
+            min: 0.5,
+            max: 20,
+            step: 0.1,
+            format: (v) => `${v.toFixed(1)} vw`
+          },
+          {
+            type: 'number',
+            key: 'menuSymbolSizeVariancePct',
+            label: 'Size Variance',
+            min: 0,
+            max: 100,
+            step: 1,
+            format: (v) => `${Math.round(v)}%`
+          },
+          {
+            type: 'number',
+            key: 'menuSymbolGrowthMultiplier',
+            label: 'Growth Multiplier Max',
+            min: 1,
+            max: 30,
+            step: 0.5,
+            format: (v) => `${v.toFixed(1)}x`
+          },
               {
                 type: 'number',
                 key: 'symbolScale',

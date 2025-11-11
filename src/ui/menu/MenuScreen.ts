@@ -23,18 +23,28 @@ type MenuSymbol = Symbol & {
   vx: number;
   vy: number;
   rotationSpeed: number;
+  startScale: number;
+  endScale: number;
+  life: number;
+  age: number;
+  exitMargin: number;
 };
 
 type MenuVisualConfig = {
   symbolTheme: SymbolTheme;
   menuSymbolCount: number;
+  menuSymbolBaseSizeVW: number;
+  menuSymbolSizeVariancePct: number;
+  menuSymbolGrowthMultiplier: number;
 };
 
 const MIN_SYMBOLS = 4;
 const MAX_SYMBOLS = 60;
+const SYMBOL_BASE_SIZE = 46;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const randBetween = (min: number, max: number) => Math.random() * (max - min) + min;
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 export class MenuScreen {
   private readonly canvas: HTMLCanvasElement;
@@ -47,7 +57,10 @@ export class MenuScreen {
   private symbols: MenuSymbol[] = [];
   private visualConfig: MenuVisualConfig = {
     symbolTheme: 'classic',
-    menuSymbolCount: 24
+    menuSymbolCount: 24,
+    menuSymbolBaseSizeVW: 6,
+    menuSymbolSizeVariancePct: 30,
+    menuSymbolGrowthMultiplier: 4.5
   };
   private colorPool: RGBColor[] = DEFAULT_SYMBOL_COLORS.map(cloneColor);
 
@@ -64,17 +77,28 @@ export class MenuScreen {
     this.colorPool = sanitizeSymbolColors(values.symbolColors);
     this.visualConfig = {
       symbolTheme: nextTheme,
-      menuSymbolCount: nextCount
+      menuSymbolCount: nextCount,
+      menuSymbolBaseSizeVW: clamp(
+        typeof values.menuSymbolBaseSizeVW === 'number' ? values.menuSymbolBaseSizeVW : this.visualConfig.menuSymbolBaseSizeVW,
+        0.5,
+        20
+      ),
+      menuSymbolSizeVariancePct: clamp(
+        typeof values.menuSymbolSizeVariancePct === 'number'
+          ? values.menuSymbolSizeVariancePct
+          : this.visualConfig.menuSymbolSizeVariancePct,
+        0,
+        100
+      ),
+      menuSymbolGrowthMultiplier: clamp(
+        typeof values.menuSymbolGrowthMultiplier === 'number'
+          ? values.menuSymbolGrowthMultiplier
+          : this.visualConfig.menuSymbolGrowthMultiplier,
+        1,
+        30
+      )
     };
-    if (themeChanged) {
-      this.symbols = [];
-    } else if (this.symbols.length > nextCount) {
-      this.symbols = this.symbols.slice(0, nextCount);
-    } else {
-      this.symbols.forEach((symbol) => {
-        symbol.color = this.pickSymbolColor();
-      });
-    }
+    this.symbols = [];
   }
 
   enter() {
@@ -162,20 +186,25 @@ export class MenuScreen {
   }
 
   private updateSymbols(dt: number, width: number, height: number) {
-    const margin = Math.max(width, height) * 0.25;
+    const fallbackMargin = Math.max(width, height) * 0.35 + 80;
     this.symbols = this.symbols
       .map((symbol) => ({
         ...symbol,
         x: symbol.x + symbol.vx * dt,
         y: symbol.y + symbol.vy * dt,
-        rotation: symbol.rotation + symbol.rotationSpeed * dt
+        rotation: symbol.rotation + symbol.rotationSpeed * dt,
+        age: symbol.age + dt,
+        scale: lerp(symbol.startScale, symbol.endScale, Math.min(1, (symbol.age + dt) / symbol.life))
       }))
-      .filter((symbol) => (
-        symbol.x > -margin &&
-        symbol.x < width + margin &&
-        symbol.y > -margin &&
-        symbol.y < height + margin
-      ));
+      .filter((symbol) => {
+        const margin = symbol.exitMargin ?? fallbackMargin;
+        const buffer = symbol.scale * 50;
+        const fullyAbove = symbol.y + buffer < -margin;
+        const offLeft = symbol.x + buffer < -margin;
+        const offRight = symbol.x - buffer > width + margin;
+        const expired = symbol.age > symbol.life + 1.5;
+        return !(expired || fullyAbove || offLeft || offRight);
+      });
   }
 
   private render(width: number, height: number) {
@@ -267,48 +296,42 @@ export class MenuScreen {
     const themeSet = SYMBOL_THEME_SETS[this.visualConfig.symbolTheme] ?? SYMBOL_THEME_SETS.classic;
     const symbolType = themeSet[Math.floor(Math.random() * themeSet.length)] as SymbolType;
     const overshoot = Math.max(width, height) * 0.08 + 32;
-    const spawnEdge = Math.floor(Math.random() * 4);
-    let x = 0;
-    let y = 0;
-    let angle = 0;
+    const exitMargin = Math.max(width, height) * 0.4 + 120;
+    const startX = randBetween(width * 0.05, width * 0.95);
+    const startY = height + randBetween(overshoot, overshoot * 2.2);
+    const verticalSpeed = randBetween(height * 0.18, height * 0.28);
+    const horizontalDrift = randBetween(-width * 0.12, width * 0.12);
 
-    switch (spawnEdge) {
-      case 0: // left
-        x = -overshoot;
-        y = randBetween(0, height);
-        angle = randBetween(-Math.PI / 6, Math.PI / 6);
-        break;
-      case 1: // right
-        x = width + overshoot;
-        y = randBetween(0, height);
-        angle = Math.PI + randBetween(-Math.PI / 6, Math.PI / 6);
-        break;
-      case 2: // top
-        x = randBetween(0, width);
-        y = -overshoot;
-        angle = Math.PI / 2 + randBetween(-Math.PI / 6, Math.PI / 6);
-        break;
-      default: // bottom
-        x = randBetween(0, width);
-        y = height + overshoot;
-        angle = -Math.PI / 2 + randBetween(-Math.PI / 6, Math.PI / 6);
-        break;
-    }
+    const baseSizeVW = this.visualConfig.menuSymbolBaseSizeVW;
+    const baseSizePx = Math.max(4, width * (baseSizeVW / 100));
+    const variance = this.visualConfig.menuSymbolSizeVariancePct / 100;
+    const jitter = variance > 0 ? randBetween(-variance, variance) : 0;
+    const startSizePx = Math.max(6, baseSizePx * (1 + jitter));
+    const startScale = Math.max(0.05, startSizePx / SYMBOL_BASE_SIZE);
 
-    const distance = Math.sqrt(width * width + height * height);
-    const speed = randBetween(distance * 0.2, distance * 0.38);
+    const minGrowth = 1.05;
+    const growthMax = Math.max(minGrowth, this.visualConfig.menuSymbolGrowthMultiplier);
+    const growthMultiplier = growthMax === minGrowth ? minGrowth : randBetween(minGrowth, growthMax);
+    const endScale = Math.max(startScale * growthMultiplier, startScale + 0.05);
+
+    const travelDistance = startY + exitMargin + endScale * 50;
+    const life = Math.max(2.5, travelDistance / verticalSpeed);
     const rotationSpeed = randBetween(-2.2, 2.2);
-    const scale = randBetween(0.6, 1.6);
 
     return {
       type: symbolType,
-      x,
-      y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
+      x: startX,
+      y: startY,
+      vx: horizontalDrift,
+      vy: -verticalSpeed,
       rotation: randBetween(0, Math.PI * 2),
       rotationSpeed,
-      scale,
+      scale: startScale,
+      startScale,
+      endScale,
+      life,
+      age: 0,
+      exitMargin,
       color: this.pickSymbolColor()
     };
   }
