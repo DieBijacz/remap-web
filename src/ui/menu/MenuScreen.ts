@@ -28,6 +28,7 @@ type MenuSymbol = Symbol & {
   life: number;
   age: number;
   exitMargin: number;
+  spawnDelay: number;
 };
 
 type MenuVisualConfig = {
@@ -188,21 +189,28 @@ export class MenuScreen {
   private updateSymbols(dt: number, width: number, height: number) {
     const fallbackMargin = Math.max(width, height) * 0.35 + 80;
     this.symbols = this.symbols
-      .map((symbol) => ({
-        ...symbol,
-        x: symbol.x + symbol.vx * dt,
-        y: symbol.y + symbol.vy * dt,
-        rotation: symbol.rotation + symbol.rotationSpeed * dt,
-        age: symbol.age + dt,
-        scale: lerp(symbol.startScale, symbol.endScale, Math.min(1, (symbol.age + dt) / symbol.life))
-      }))
+      .map((symbol) => {
+        const nextAge = symbol.age + dt;
+        const activeAge = Math.max(0, nextAge - symbol.spawnDelay);
+        const isActive = nextAge >= symbol.spawnDelay;
+        const progress = Math.min(1, symbol.life > 0 ? activeAge / symbol.life : 1);
+        return {
+          ...symbol,
+          age: nextAge,
+          x: isActive ? symbol.x + symbol.vx * dt : symbol.x,
+          y: isActive ? symbol.y + symbol.vy * dt : symbol.y,
+          rotation: isActive ? symbol.rotation + symbol.rotationSpeed * dt : symbol.rotation,
+          scale: lerp(symbol.startScale, symbol.endScale, progress)
+        };
+      })
       .filter((symbol) => {
         const margin = symbol.exitMargin ?? fallbackMargin;
         const buffer = symbol.scale * 50;
-        const fullyAbove = symbol.y + buffer < -margin;
+        const isActive = symbol.age >= symbol.spawnDelay;
+        const fullyAbove = isActive && symbol.y + buffer < -margin;
         const offLeft = symbol.x + buffer < -margin;
         const offRight = symbol.x - buffer > width + margin;
-        const expired = symbol.age > symbol.life + 1.5;
+        const expired = isActive && (symbol.age - symbol.spawnDelay) > symbol.life + 1.5;
         return !(expired || fullyAbove || offLeft || offRight);
       });
   }
@@ -239,6 +247,7 @@ export class MenuScreen {
     const { ctx } = this;
     ctx.save();
     this.symbols.forEach((symbol) => {
+      if (symbol.age < symbol.spawnDelay) return;
       drawSymbol(ctx, symbol, false, 0.7);
     });
     ctx.restore();
@@ -317,6 +326,7 @@ export class MenuScreen {
     const travelDistance = startY + exitMargin + endScale * 50;
     const life = Math.max(2.5, travelDistance / verticalSpeed);
     const rotationSpeed = randBetween(-2.2, 2.2);
+    const spawnDelay = randBetween(0, Math.min(8, 0.3 * this.visualConfig.menuSymbolCount));
 
     return {
       type: symbolType,
@@ -332,6 +342,7 @@ export class MenuScreen {
       life,
       age: 0,
       exitMargin,
+      spawnDelay,
       color: this.pickSymbolColor()
     };
   }
