@@ -45,6 +45,7 @@ export class App {
     this.game.refreshSettings(this.settingsValues);
 
     this.menuScreen = new MenuScreen(canvas, ctx);
+    this.menuScreen.setConfig(this.settingsValues);
     this.leaderboardScreen = new LeaderboardScreen(canvas, ctx);
     this.settingsScreen = new SettingsScreen({
       canvas,
@@ -64,7 +65,7 @@ export class App {
 
   start() {
     this.stateManager.showState(GameState.MENU);
-    this.menuScreen.draw();
+    this.menuScreen.enter();
   }
 
   private initializeSettings(): PersistentConfig {
@@ -87,6 +88,7 @@ export class App {
       maxTimeBonus: persistedConfig.maxTimeBonus ?? 3,
       bonusWindow: persistedConfig.bonusWindow ?? 2.5,
       ringRadiusFactor: persistedConfig.ringRadiusFactor ?? 0.15,
+      menuSymbolCount: persistedConfig.menuSymbolCount ?? 24,
       minTimeBonus: persistedConfig.minTimeBonus ?? 0.5,
       mechanicInterval: persistedConfig.mechanicInterval ?? 10,
       mechanicRandomize: persistedConfig.mechanicRandomize ?? false,
@@ -128,16 +130,19 @@ export class App {
     switch (state) {
       case GameState.MENU:
         this.settingsReturnState = null;
-        this.menuScreen.draw();
+        this.menuScreen.enter();
         break;
       case GameState.SETTINGS:
+        this.menuScreen.exit();
         this.settingsScreen.setValues(this.settingsValues);
         this.settingsScreen.enter();
         break;
       case GameState.GAME:
+        this.menuScreen.exit();
         clearCanvas(this.canvas, this.ctx);
         break;
       case GameState.LEADERBOARD:
+        this.menuScreen.exit();
         this.leaderboardScreen.setData(this.leaderboardData);
         this.leaderboardScreen.draw();
         break;
@@ -260,6 +265,7 @@ export class App {
     this.settingsValues = { ...values };
     this.configStore.save(this.settingsValues);
     this.game.refreshSettings(this.settingsValues);
+    this.menuScreen.setConfig(this.settingsValues);
   }
 
   private handleResetHighscore() {

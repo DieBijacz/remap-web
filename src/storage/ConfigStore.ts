@@ -7,6 +7,7 @@ export type Config = {
   maxTimeBonus?: number;
   bonusWindow?: number;
   ringRadiusFactor?: number;
+  menuSymbolCount?: number;
   minTimeBonus?: number;
   mechanicInterval?: number;
   difficulty?: 'easy' | 'medium' | 'hard' | 'progressive';

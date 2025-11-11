@@ -110,9 +110,12 @@ interface HudMetrics {
 }
 
 interface MechanicLevelUpNotice {
-  title: string;
-  body: string;
+  tier: number;
+  slots: number;
+  headline: string;
+  summary: string;
   detail?: string;
+  cta?: string;
 }
 
 const hexToRgb = (hex: string) => {
@@ -632,26 +635,32 @@ export class Game implements InputHandler {
   private startProgressiveLevelAnnouncement(block: number, mechanicCount: number) {
     const tier = Math.max(1, block);
     const increase = mechanicCount - this.progressiveMechanicLimit;
-    const clampedCount = Math.max(0, mechanicCount);
-    const plural = clampedCount === 1 ? 'mechanic' : 'mechanics';
-    const body =
-      clampedCount <= 0
-        ? 'Mechanics are currently disabled.'
-        : clampedCount === 1 && this.progressiveMechanicLimit === 0
-          ? 'Mechanics are now entering the rotation.'
-          : increase > 1
-            ? `Mechanic slots jumped to ${clampedCount} ${plural}.`
-            : `Up to ${clampedCount} ${plural} can be active at once.`;
-    const detailBase =
-      clampedCount <= 1
-        ? 'Gear up: challenges escalate from here.'
-        : increase > 1
-          ? 'Multiple mechanic slots unlocked at once.'
-          : 'Prepare for overlapping mechanics.';
+    const slots = Math.max(0, mechanicCount);
+    const headline =
+      slots <= 0
+        ? 'Mechanics paused'
+        : increase > 0
+          ? `+${increase} slot${increase === 1 ? '' : 's'} unlocked`
+          : 'Rotation intensifies';
+    const summary =
+      slots <= 0
+        ? 'Modifiers will stay inactive for a moment.'
+        : slots === 1
+          ? '1 mechanic is now in rotation.'
+          : `${slots} mechanics now rotate together.`;
+    const detail =
+      slots <= 0
+        ? 'Use the breather to rebuild your streak.'
+        : increase > 0
+          ? 'A new modifier can appear immediately.'
+          : 'Existing modifiers will overlap more often.';
     this.mechanicLevelUpNotice = {
-      title: `Progressive Tier ${tier}`,
-      body,
-      detail: `${detailBase} Game resumes shortly...`
+      tier,
+      slots,
+      headline,
+      summary,
+      detail,
+      cta: 'Press Enter to continue'
     };
     this.mechanicLevelUpTimer = PROGRESSIVE_LEVEL_NOTICE_DURATION;
     if (!this.mechanicLevelPauseActive) {
@@ -1286,6 +1295,9 @@ export class Game implements InputHandler {
       return;
     }
     if (this.mechanicLevelUpNotice) {
+      if (e.key === 'Enter') {
+        this.clearProgressiveLevelAnnouncement();
+      }
       e.preventDefault();
       return;
     }
@@ -2381,42 +2393,20 @@ export class Game implements InputHandler {
 
     const { w, h } = this.renderer;
     ctx.save();
-    ctx.fillStyle = 'rgba(6, 10, 18, 0.62)';
+    ctx.fillStyle = 'rgba(5, 8, 14, 0.75)';
     ctx.fillRect(0, 0, w, h);
     ctx.restore();
 
-    const titleSize = Math.max(26, Math.round(h * 0.06));
-    const bodySize = Math.max(18, Math.round(h * 0.033));
-    const detailSize = Math.max(15, Math.round(h * 0.028));
-    const lines: Array<{ text: string; size: number; color: string; shadow: number }> = [
-      { text: notice.title, size: titleSize, color: '#79c0ff', shadow: 16 },
-      { text: notice.body, size: bodySize, color: '#cdd9e5', shadow: 10 }
-    ];
-    if (notice.detail) {
-      lines.push({ text: notice.detail, size: detailSize, color: '#94a3b8', shadow: 8 });
-    }
+    const cardWidth = Math.min(w * 0.72, 620);
+    const cardHeight = Math.max(h * 0.24, 210);
+    const cardX = (w - cardWidth) / 2;
+    const cardY = Math.max(h * 0.18, (h - cardHeight) / 2);
+    const paddingX = Math.max(28, cardWidth * 0.08);
+    const paddingY = Math.max(22, Math.round(h * 0.035));
+    const radius = Math.min(32, cardHeight * 0.25);
 
-    const lineSpacing = Math.max(12, Math.round(h * 0.018));
-    let maxWidth = 0;
-    ctx.save();
-    lines.forEach((line) => {
-      ctx.font = `${line.size}px Orbitron, sans-serif`;
-      maxWidth = Math.max(maxWidth, ctx.measureText(line.text).width);
-    });
-    ctx.restore();
-
-    const paddingX = Math.max(32, Math.round(w * 0.05));
-    const paddingY = Math.max(28, Math.round(h * 0.04));
-    const contentHeight =
-      lines.reduce((total, line) => total + line.size, 0) + lineSpacing * (lines.length - 1);
-    const boxWidth = Math.min(w * 0.8, maxWidth + paddingX * 2);
-    const boxHeight = contentHeight + paddingY * 2;
-    const boxX = (w - boxWidth) / 2;
-    const boxY = (h - boxHeight) / 2;
-    const cornerRadius = Math.min(boxHeight / 2, Math.max(20, Math.round(boxWidth * 0.06)));
-
-    const drawRoundedRect = (x: number, y: number, width: number, height: number, radius: number) => {
-      const rad = Math.min(radius, height / 2, width / 2);
+    const drawRoundRect = (x: number, y: number, width: number, height: number, r: number) => {
+      const rad = Math.min(r, width / 2, height / 2);
       ctx.beginPath();
       ctx.moveTo(x + rad, y);
       ctx.lineTo(x + width - rad, y);
@@ -2431,32 +2421,108 @@ export class Game implements InputHandler {
     };
 
     ctx.save();
-    drawRoundedRect(boxX, boxY, boxWidth, boxHeight, cornerRadius);
-    ctx.fillStyle = 'rgba(12, 18, 28, 0.94)';
+    drawRoundRect(cardX, cardY, cardWidth, cardHeight, radius);
+    const gradient = ctx.createLinearGradient(cardX, cardY, cardX, cardY + cardHeight);
+    gradient.addColorStop(0, 'rgba(12, 20, 32, 0.98)');
+    gradient.addColorStop(1, 'rgba(7, 11, 18, 0.92)');
+    ctx.fillStyle = gradient;
     ctx.fill();
     ctx.strokeStyle = 'rgba(121, 192, 255, 0.45)';
-    ctx.lineWidth = Math.max(2, Math.round(boxWidth * 0.006));
+    ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
 
-    let currentY = boxY + paddingY;
-    lines.forEach((line, index) => {
-      currentY += line.size / 2;
+    const centerX = w / 2;
+    let cursorY = cardY + paddingY;
+    const labelSize = Math.max(14, Math.round(h * 0.024));
+    const headlineSize = Math.max(30, Math.round(h * 0.066));
+    const summarySize = Math.max(18, Math.round(h * 0.032));
+    const detailSize = Math.max(15, Math.round(h * 0.028));
+
+    ctx.save();
+    ctx.font = `${labelSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`Progressive Tier ${notice.tier}`, centerX, cursorY);
+    ctx.restore();
+    cursorY += labelSize + Math.max(6, h * 0.008);
+
+    ctx.save();
+    ctx.font = `${headlineSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#79c0ff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+    ctx.shadowBlur = 14;
+    ctx.fillText(notice.headline, centerX, cursorY);
+    ctx.restore();
+    cursorY += headlineSize + Math.max(12, h * 0.014);
+
+    ctx.save();
+    ctx.font = `${summarySize}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#cdd9e5';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(notice.summary, centerX, cursorY);
+    ctx.restore();
+    cursorY += summarySize + Math.max(8, h * 0.01);
+
+    if (notice.detail) {
       ctx.save();
-      ctx.font = `${line.size}px Orbitron, sans-serif`;
+      ctx.font = `${detailSize}px Orbitron, sans-serif`;
+      ctx.fillStyle = 'rgba(148, 163, 184, 0.92)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(notice.detail, centerX, cursorY);
+      ctx.restore();
+      cursorY += detailSize;
+    }
+
+    const pillY = cardY + cardHeight - paddingY - Math.max(32, h * 0.04);
+    const slotsLabel = notice.slots <= 0
+      ? 'Slots inactive'
+      : `${notice.slots} slot${notice.slots === 1 ? '' : 's'} active`;
+    const secondsLeft = Math.max(0, Math.ceil(this.mechanicLevelUpTimer));
+    const ctaBase = notice.cta ?? 'Press Enter to continue';
+    const ctaText = secondsLeft > 0 ? `${ctaBase} - ${secondsLeft}s` : ctaBase;
+
+    const drawPill = (
+      text: string,
+      x: number,
+      y: number,
+      options: { align: 'left' | 'right'; background: string; color: string }
+    ) => {
+      const padX = 18;
+      ctx.save();
+      ctx.font = `${Math.max(14, Math.round(h * 0.025))}px Orbitron, sans-serif`;
+      const width = ctx.measureText(text).width + padX * 2;
+      const height = Math.max(32, Math.round(h * 0.05));
+      const pillX = options.align === 'left' ? x : x - width;
+      const pillYPos = y;
+      const r = height / 2;
+      drawRoundRect(pillX, pillYPos, width, height, r);
+      ctx.fillStyle = options.background;
+      ctx.fill();
+      ctx.fillStyle = options.color;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = line.color;
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
-      ctx.shadowBlur = line.shadow;
-      ctx.fillText(line.text, w / 2, currentY);
+      ctx.fillText(text, pillX + width / 2, pillYPos + height / 2 + 1);
       ctx.restore();
-      currentY += line.size / 2;
-      if (index < lines.length - 1) {
-        currentY += lineSpacing;
-      }
+    };
+
+    drawPill(slotsLabel, cardX + paddingX, pillY, {
+      align: 'left',
+      background: 'rgba(40, 54, 74, 0.9)',
+      color: '#f5faff'
+    });
+    drawPill(ctaText, cardX + cardWidth - paddingX, pillY, {
+      align: 'right',
+      background: 'rgba(57, 88, 128, 0.95)',
+      color: '#d7ecff'
     });
   }
+
   private drawTimeBar(ctx: CanvasRenderingContext2D) {
     const r = this.renderer;
     const pad = Math.round(Math.max(12, r.h * 0.03));

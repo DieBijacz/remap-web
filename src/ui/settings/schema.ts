@@ -159,6 +159,15 @@ export const SETTINGS_TABS: SettingsTab[] = [
       },
       {
         type: 'number',
+        key: 'menuSymbolCount',
+        label: 'Menu Symbols',
+        min: 4,
+        max: 60,
+        step: 1,
+        format: (v) => `${Math.round(v)}`
+      },
+      {
+        type: 'number',
         key: 'symbolScale',
         label: 'Symbol Size',
         min: 0.6,
