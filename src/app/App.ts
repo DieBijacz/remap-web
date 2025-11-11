@@ -7,6 +7,7 @@ import { MenuScreen } from '../ui/menu/MenuScreen';
 import { LeaderboardScreen, type LeaderboardScreenData } from '../ui/leaderboard/LeaderboardScreen';
 import { SettingsScreen } from '../ui/settings/SettingsScreen';
 import { clearCanvas } from '../ui/canvasUtils';
+import { sanitizeSymbolColors } from '../config/colorPresets';
 
 export class App {
   private readonly canvas: HTMLCanvasElement;
@@ -81,6 +82,7 @@ export class App {
     const persistedScoreRayCount = scoreRayEnabled === false ? 0 : persistedConfig.scoreRayCount ?? 3;
     const persistedSymbolTheme = persistedConfig.symbolTheme === 'pacman' ? 'pacman' : 'classic';
     const nameEntryModeDefault = persistedConfig.nameEntryMode === 'keyboard' ? 'keyboard' : 'slots';
+    const symbolColorSetting = sanitizeSymbolColors(persistedConfig.symbolColors);
 
     const settingsValues: PersistentConfig = {
       ...persistedConfig,
@@ -97,6 +99,7 @@ export class App {
       symbolScale: persistedConfig.symbolScale ?? 1,
       symbolStroke: persistedConfig.symbolStroke ?? 1,
       symbolTheme: persistedSymbolTheme,
+      symbolColors: symbolColorSetting,
       uiFontScale: persistedConfig.uiFontScale ?? 0.9,
       particlesPerScore: persistedParticlesPerScore,
       particlesPersist: persistedConfig.particlesPersist ?? false,

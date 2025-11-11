@@ -1,7 +1,21 @@
 import type { Config as PersistentConfig } from '../../storage/ConfigStore';
 import type { Action } from '../../input/Keymap';
 import { clearCanvas, drawButton, fillRoundedRect, pointInRect, strokeRoundedRect } from '../canvasUtils';
-import { SETTINGS_TABS, type SettingItem, type SettingsTab } from './schema';
+import {
+  SETTINGS_TABS,
+  type SettingItem,
+  type SettingsSection,
+  type SettingsSubTab,
+  type SettingsTab,
+  type SettingsTabKey
+} from './schema';
+import {
+  DEFAULT_SYMBOL_COLORS,
+  clampColorValue,
+  rgbToCss,
+  sanitizeSymbolColors,
+  type RGBColor
+} from '../../config/colorPresets';
 
 type SettingsScreenOptions = {
   canvas: HTMLCanvasElement;
@@ -17,9 +31,16 @@ export class SettingsScreen {
   private currentTabIndex = 0;
   private selectionIndex: number;
   private tabFocus = false;
+  private subTabFocus = false;
+  private sectionFocus = false;
   private message: string | null = null;
   private backButtonRect: DOMRect | null = null;
   private tabButtonRects: DOMRect[] = [];
+  private subTabButtonRects: DOMRect[] = [];
+  private sectionButtonRects: DOMRect[] = [];
+  private colorChannelFocus: Record<number, 0 | 1 | 2> = {};
+  private subTabIndices: Partial<Record<SettingsTabKey, number>> = {};
+  private sectionIndices: Record<string, number> = {};
 
   constructor(options: SettingsScreenOptions) {
     this.options = options;
@@ -30,6 +51,10 @@ export class SettingsScreen {
   setValues(values: PersistentConfig) {
     this.values = { ...values };
     this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+    this.colorChannelFocus = {};
+    this.subTabFocus = false;
+    this.sectionFocus = false;
+    this.sectionIndices = {};
   }
 
   getValues() {
@@ -39,6 +64,8 @@ export class SettingsScreen {
   enter() {
     this.message = null;
     this.tabFocus = false;
+    this.subTabFocus = false;
+    this.sectionFocus = false;
     this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
     this.draw();
   }
@@ -104,8 +131,108 @@ export class SettingsScreen {
       tabCursorX += metric.width + tabSpacing;
     });
 
-    const items = this.getCurrentTab().items;
-    const listStartY = tabCenterY + tabBarHeight / 2 + Math.max(20, Math.round(cssH * 0.035));
+    const activeTab = this.getCurrentTab();
+    const subTabs = activeTab.subTabs ?? [];
+    const hasSubTabs = subTabs.length > 0;
+    this.subTabButtonRects = [];
+    this.sectionButtonRects = [];
+
+    let listStartY = tabCenterY + tabBarHeight / 2 + Math.max(20, Math.round(cssH * 0.035));
+    if (hasSubTabs) {
+      const subFontSize = Math.max(11, Math.round(cssH * 0.027 * Math.max(0.75, fontScale)));
+      const subPaddingX = Math.max(20, Math.round(cssW * 0.03));
+      const subPaddingY = Math.max(10, Math.round(subFontSize * 0.5));
+      const subSpacing = Math.max(12, Math.round(cssW * 0.015));
+      const subMetrics = subTabs.map((tab) => {
+        const width = ctx.measureText(tab.label).width + subPaddingX;
+        const height = Math.max(subFontSize + subPaddingY, 30);
+        return { width, height };
+      });
+      const subBarHeight = subMetrics.reduce((max, metric) => Math.max(max, metric.height), 0);
+      const totalSubWidth =
+        subMetrics.reduce((sum, metric) => sum + metric.width, 0) + subSpacing * Math.max(subTabs.length - 1, 0);
+      let subCursorX = Math.round(Math.max(marginX * 0.8, (cssW - totalSubWidth) / 2));
+      const subCenterY = listStartY + subBarHeight / 2;
+      const activeSubIndex = this.getCurrentSubTabIndex();
+      subTabs.forEach((tab, idx) => {
+        const metric = subMetrics[idx];
+        const subX = subCursorX;
+        const subY = subCenterY - metric.height / 2;
+        const isActive = idx === activeSubIndex;
+        const isFocused = isActive && this.subTabFocus;
+        const radius = Math.min(18, metric.height / 2);
+        ctx.fillStyle = isFocused
+          ? 'rgba(79, 70, 229, 0.32)'
+          : isActive
+            ? 'rgba(34, 197, 94, 0.25)'
+            : 'rgba(148, 163, 184, 0.18)';
+        fillRoundedRect(ctx, subX, subY, metric.width, metric.height, radius);
+        ctx.fillStyle = isFocused ? '#f8fafc' : isActive ? '#7ee787' : '#94a3b8';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = `${subFontSize}px Orbitron, sans-serif`;
+        ctx.fillText(tab.label, subX + metric.width / 2, subCenterY);
+        if (isFocused) {
+          ctx.strokeStyle = 'rgba(126, 231, 135, 0.9)';
+          ctx.lineWidth = 2;
+          strokeRoundedRect(ctx, subX + 2, subY + 2, metric.width - 4, metric.height - 4, radius);
+        }
+        this.subTabButtonRects[idx] = new DOMRect(subX, subY, metric.width, metric.height);
+        subCursorX += metric.width + subSpacing;
+      });
+      listStartY = subCenterY + subBarHeight / 2 + Math.max(18, Math.round(cssH * 0.03));
+    }
+
+    const sections = this.getCurrentSections();
+    const hasSections = sections.length > 0;
+    if (hasSections) {
+      const sectionFontSize = Math.max(11, Math.round(cssH * 0.024 * Math.max(0.75, fontScale)));
+      const sectionPaddingX = Math.max(18, Math.round(cssW * 0.025));
+      const sectionPaddingY = Math.max(8, Math.round(sectionFontSize * 0.45));
+      const sectionSpacing = Math.max(10, Math.round(cssW * 0.015));
+      const sectionMetrics = sections.map((section) => {
+        const width = ctx.measureText(section.label).width + sectionPaddingX;
+        const height = Math.max(sectionFontSize + sectionPaddingY, 28);
+        return { width, height };
+      });
+      const sectionBarHeight = sectionMetrics.reduce((max, metric) => Math.max(max, metric.height), 0);
+      const totalSectionWidth =
+        sectionMetrics.reduce((sum, metric) => sum + metric.width, 0) +
+        sectionSpacing * Math.max(sections.length - 1, 0);
+      let sectionCursorX = Math.round(Math.max(marginX, (cssW - totalSectionWidth) / 2));
+      const sectionCenterY = listStartY + sectionBarHeight / 2;
+      const activeSectionIndex = this.getCurrentSectionIndex();
+      sections.forEach((section, idx) => {
+        const metric = sectionMetrics[idx];
+        const sectionX = sectionCursorX;
+        const sectionY = sectionCenterY - metric.height / 2;
+        const isActiveSection = idx === activeSectionIndex;
+        const isFocusedSection = isActiveSection && this.sectionFocus;
+        const radius = Math.min(16, metric.height / 2);
+        ctx.fillStyle = isFocusedSection
+          ? 'rgba(79, 70, 229, 0.35)'
+          : isActiveSection
+            ? 'rgba(34, 197, 94, 0.22)'
+            : 'rgba(148, 163, 184, 0.15)';
+        fillRoundedRect(ctx, sectionX, sectionY, metric.width, metric.height, radius);
+        ctx.fillStyle = isFocusedSection ? '#f8fafc' : isActiveSection ? '#7ee787' : '#94a3b8';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = `${sectionFontSize}px Orbitron, sans-serif`;
+        ctx.fillText(section.label, sectionX + metric.width / 2, sectionCenterY);
+        if (isFocusedSection) {
+          ctx.strokeStyle = 'rgba(126, 231, 135, 0.9)';
+          ctx.lineWidth = 2;
+          strokeRoundedRect(ctx, sectionX + 2, sectionY + 2, metric.width - 4, metric.height - 4, radius);
+        }
+        this.sectionButtonRects[idx] = new DOMRect(sectionX, sectionY, metric.width, metric.height);
+        sectionCursorX += metric.width + sectionSpacing;
+      });
+      listStartY = sectionCenterY + sectionBarHeight / 2 + Math.max(16, Math.round(cssH * 0.028));
+    }
+
+    const items = this.getCurrentItems();
+    const colorPalette = sanitizeSymbolColors(this.values.symbolColors);
     const baseSpacing = Math.max(24, Math.round(cssH * 0.052));
     const rowSpacing = Math.max(22, Math.round(baseSpacing * Math.max(0.82, fontScale)));
     const rowHeight = Math.max(18, Math.round(cssH * 0.042 * Math.max(0.85, fontScale)));
@@ -163,6 +290,49 @@ export class SettingsScreen {
         ctx.font = `${labelSize}px Orbitron, sans-serif`;
         ctx.fillStyle = isSelected ? '#7ee787' : '#94a3b8';
         ctx.fillText(item.description ?? 'Press Enter', cssW - marginX, displayY);
+      } else if (item.type === 'color') {
+        const color = colorPalette[item.index] ?? DEFAULT_SYMBOL_COLORS[item.index % DEFAULT_SYMBOL_COLORS.length];
+        const highlightTop = y - rowHeight * 0.2;
+        const highlightHeight = rowHeight;
+        const previewPadding = Math.max(2, rowHeight * 0.08);
+        const previewSize = Math.max(
+          14,
+          Math.min(highlightHeight - previewPadding * 2, rowHeight * 0.85)
+        );
+        const previewX = cssW - marginX - previewSize;
+        const previewY = highlightTop + (highlightHeight - previewSize) / 2;
+        ctx.save();
+        ctx.fillStyle = rgbToCss(color);
+        ctx.fillRect(previewX, previewY, previewSize, previewSize);
+        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.65)';
+        ctx.strokeRect(previewX, previewY, previewSize, previewSize);
+        ctx.restore();
+
+        const channels: Array<{ label: string; value: number }> = [
+          { label: 'R', value: color.r },
+          { label: 'G', value: color.g },
+          { label: 'B', value: color.b }
+        ];
+        const focusChannel = this.getColorChannel(item.index);
+        ctx.font = `${valueSize}px Orbitron, sans-serif`;
+        ctx.textAlign = 'right';
+        const channelWidth = Math.max(
+          ctx.measureText('R:000').width,
+          ctx.measureText('G:000').width,
+          ctx.measureText('B:000').width
+        );
+        const channelGap = Math.max(20, rowHeight * 0.6);
+        let cursorX = previewX - Math.max(18, rowHeight * 0.45);
+        for (let channelIdx = channels.length - 1; channelIdx >= 0; channelIdx -= 1) {
+          const channel = channels[channelIdx];
+          const active = isSelected && focusChannel === channelIdx;
+          const valueText = channel.value.toString().padStart(3, '0');
+          const text = `${channel.label}:${valueText}`;
+          ctx.fillStyle = active ? '#7ee787' : isSelected ? '#cbd5f5' : '#94a3b8';
+          ctx.fillText(text, cursorX, displayY);
+          cursorX -= channelWidth + channelGap;
+        }
       }
     });
 
@@ -188,7 +358,7 @@ export class SettingsScreen {
     ctx.font = `${Math.max(9, Math.round(cssH * 0.02 * fontScale))}px Orbitron, sans-serif`;
     ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
     ctx.fillText(
-      'Arrows move and adjust - Press UP on the first row to focus tabs - Enter toggles - O hides settings',
+      'Arrows move and adjust - Press UP to focus section or sub-tabs, then main tabs - Enter toggles / cycles color channels - O hides settings',
       cssW / 2,
       btnY - Math.max(24, Math.round(cssH * 0.06))
     );
@@ -196,13 +366,47 @@ export class SettingsScreen {
   }
 
   handleAction(action: Action): boolean {
-    const items = this.getCurrentTab().items;
+    const items = this.getCurrentItems();
     const option = items[this.selectionIndex];
+    const hasSubTabs = this.hasSubTabs();
+    const hasSections = this.hasSections();
     switch (action) {
       case 'down':
         if (this.tabFocus) {
-          if (this.tabHasSelectableSettings(this.currentTabIndex)) {
+          if (hasSubTabs) {
             this.tabFocus = false;
+            this.subTabFocus = true;
+            this.draw();
+          } else if (hasSections) {
+            this.tabFocus = false;
+            this.sectionFocus = true;
+            this.draw();
+          } else if (this.tabHasSelectableSettings(this.currentTabIndex)) {
+            this.tabFocus = false;
+            this.sectionFocus = false;
+            this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+            this.draw();
+          }
+          return false;
+        }
+        if (this.subTabFocus) {
+          if (hasSections) {
+            this.subTabFocus = false;
+            this.sectionFocus = true;
+            this.draw();
+            return false;
+          }
+          if (this.tabHasSelectableSettings(this.currentTabIndex)) {
+            this.subTabFocus = false;
+            this.sectionFocus = false;
+            this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+            this.draw();
+          }
+          return false;
+        }
+        if (this.sectionFocus) {
+          if (this.tabHasSelectableSettings(this.currentTabIndex)) {
+            this.sectionFocus = false;
             this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
             this.draw();
           }
@@ -214,6 +418,22 @@ export class SettingsScreen {
         if (this.tabFocus) {
           return false;
         }
+        if (this.subTabFocus) {
+          this.subTabFocus = false;
+          this.tabFocus = true;
+          this.draw();
+          return false;
+        }
+        if (this.sectionFocus) {
+          this.sectionFocus = false;
+          if (hasSubTabs) {
+            this.subTabFocus = true;
+          } else {
+            this.tabFocus = true;
+          }
+          this.draw();
+          return false;
+        }
         if (!this.tabHasSelectableSettings(this.currentTabIndex)) {
           this.tabFocus = true;
           this.draw();
@@ -221,7 +441,13 @@ export class SettingsScreen {
         }
         const first = this.getFirstSelectableIndex(this.currentTabIndex);
         if (this.selectionIndex === first) {
-          this.tabFocus = true;
+          if (hasSections) {
+            this.sectionFocus = true;
+          } else if (hasSubTabs) {
+            this.subTabFocus = true;
+          } else {
+            this.tabFocus = true;
+          }
           this.draw();
           return false;
         }
@@ -231,6 +457,10 @@ export class SettingsScreen {
       case 'left':
         if (this.tabFocus) {
           this.changeTab(-1, { focusMode: 'tabs' });
+        } else if (this.subTabFocus) {
+          this.changeSubTab(-1);
+        } else if (this.sectionFocus) {
+          this.changeSection(-1);
         } else {
           this.adjustOption(option, -1);
         }
@@ -238,23 +468,65 @@ export class SettingsScreen {
       case 'right':
         if (this.tabFocus) {
           this.changeTab(1, { focusMode: 'tabs' });
+        } else if (this.subTabFocus) {
+          this.changeSubTab(1);
+        } else if (this.sectionFocus) {
+          this.changeSection(1);
         } else {
           this.adjustOption(option, 1);
         }
         return false;
       case 'confirm':
         if (this.tabFocus) {
-          if (this.tabHasSelectableSettings(this.currentTabIndex)) {
+          if (hasSubTabs) {
             this.tabFocus = false;
+            this.subTabFocus = true;
+            this.sectionFocus = false;
+            this.draw();
+          } else if (hasSections) {
+            this.tabFocus = false;
+            this.sectionFocus = true;
+            this.draw();
+          } else if (this.tabHasSelectableSettings(this.currentTabIndex)) {
+            this.tabFocus = false;
+            this.sectionFocus = false;
             this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
             this.draw();
           }
           return false;
         }
-        if (option?.type === 'action') {
+        if (this.subTabFocus) {
+          if (hasSections) {
+            this.subTabFocus = false;
+            this.sectionFocus = true;
+            this.draw();
+            return false;
+          }
+          this.subTabFocus = false;
+          if (this.tabHasSelectableSettings(this.currentTabIndex)) {
+            this.sectionFocus = false;
+            this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+          }
+          this.draw();
+          return false;
+        }
+        if (this.sectionFocus) {
+          this.sectionFocus = false;
+          if (this.tabHasSelectableSettings(this.currentTabIndex)) {
+            this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+          }
+          this.draw();
+          return false;
+        }
+        if (!option) {
+          return false;
+        }
+        if (option.type === 'action') {
           this.triggerAction(option);
-        } else if (option?.type === 'toggle') {
+        } else if (option.type === 'toggle') {
           this.toggleSetting(option);
+        } else if (option.type === 'color') {
+          this.cycleColorChannel(option);
         }
         return false;
       case 'cancel':
@@ -295,6 +567,11 @@ export class SettingsScreen {
       this.selectTab(tabIdx, { focusMode: 'content' });
       return false;
     }
+    const subIdx = this.subTabButtonRects.findIndex((rect) => pointInRect(x, y, rect));
+    if (subIdx !== -1) {
+      this.selectSubTab(subIdx);
+      return false;
+    }
     if (pointInRect(x, y, this.backButtonRect)) {
       return true;
     }
@@ -320,6 +597,8 @@ export class SettingsScreen {
       this.toggleSetting(option);
     } else if (option.type === 'cycle') {
       this.cycleOption(option, direction);
+    } else if (option.type === 'color') {
+      this.adjustColorSetting(option, direction);
     }
   }
 
@@ -362,8 +641,40 @@ export class SettingsScreen {
     }
   }
 
+  private adjustColorSetting(option: Extract<SettingItem, { type: 'color' }>, direction: number) {
+    const palette = sanitizeSymbolColors(this.values.symbolColors);
+    const fallback = DEFAULT_SYMBOL_COLORS[option.index % DEFAULT_SYMBOL_COLORS.length];
+    const current = palette[option.index] ?? fallback;
+    const channel = this.getColorChannel(option.index);
+    const delta = direction * (option.step ?? 1);
+    const next: RGBColor = { ...current };
+    if (channel === 0) {
+      next.r = clampColorValue(next.r + delta);
+    } else if (channel === 1) {
+      next.g = clampColorValue(next.g + delta);
+    } else {
+      next.b = clampColorValue(next.b + delta);
+    }
+    const nextPalette = palette.map((color, idx) => (idx === option.index ? next : color));
+    this.persist({ [option.key]: nextPalette } as PersistentConfig);
+  }
+
+  private cycleColorChannel(option: Extract<SettingItem, { type: 'color' }>) {
+    const current = this.getColorChannel(option.index);
+    const next = ((current + 1) % 3) as 0 | 1 | 2;
+    this.colorChannelFocus[option.index] = next;
+    this.draw();
+  }
+
+  private getColorChannel(index: number): 0 | 1 | 2 {
+    if (!(index in this.colorChannelFocus)) {
+      this.colorChannelFocus[index] = 0;
+    }
+    return this.colorChannelFocus[index];
+  }
+
   private moveSelection(delta: number) {
-    const items = this.getCurrentTab().items;
+    const items = this.getCurrentItems();
     if (items.length === 0 || !this.tabHasSelectableSettings(this.currentTabIndex)) {
       return;
     }
@@ -388,7 +699,11 @@ export class SettingsScreen {
     if (SETTINGS_TABS.length === 0) return;
     const normalized = ((index % SETTINGS_TABS.length) + SETTINGS_TABS.length) % SETTINGS_TABS.length;
     this.currentTabIndex = normalized;
-    const items = this.getCurrentTab().items;
+    const tab = this.getCurrentTab();
+    if (tab.subTabs && tab.subTabs.length > 0) {
+      this.getSubTabIndexForKey(tab.key, tab.subTabs.length);
+    }
+    const items = this.getItemsForTab(normalized);
     if (items.length === 0) {
       this.selectionIndex = 0;
     } else {
@@ -397,23 +712,190 @@ export class SettingsScreen {
     }
     if (options?.focusMode === 'tabs') {
       this.tabFocus = true;
+      this.subTabFocus = false;
+      this.sectionFocus = false;
     } else if (options?.focusMode === 'content') {
       this.tabFocus = false;
+      this.subTabFocus = false;
+      this.sectionFocus = false;
     } else if (!this.tabHasSelectableSettings(normalized)) {
       this.tabFocus = true;
+      this.subTabFocus = false;
+      this.sectionFocus = false;
+    } else {
+      this.tabFocus = false;
+      this.subTabFocus = false;
+      this.sectionFocus = false;
     }
     this.message = null;
     this.draw();
   }
 
+  private getCurrentItems(): SettingItem[] {
+    return this.getItemsForTab(this.currentTabIndex);
+  }
+
+  private getItemsForTab(tabIndex: number): SettingItem[] {
+    const tab = SETTINGS_TABS[tabIndex];
+    if (!tab) {
+      return [];
+    }
+    if (tab.subTabs && tab.subTabs.length > 0) {
+      const subIdx = this.getSubTabIndexForKey(tab.key, tab.subTabs.length);
+      const subTab = tab.subTabs[subIdx];
+      if (subTab?.sections && subTab.sections.length > 0) {
+        const sectionIdx = this.getSectionIndexForKey(tab.key, subTab.key, subTab.sections.length);
+        return subTab.sections[sectionIdx]?.items ?? [];
+      }
+      return subTab?.items ?? [];
+    }
+    return tab.items ?? [];
+  }
+
+  private hasSubTabs(tab: SettingsTab = this.getCurrentTab()) {
+    return Boolean(tab.subTabs && tab.subTabs.length > 0);
+  }
+
+  private getCurrentSubTab(): SettingsSubTab | null {
+    const tab = this.getCurrentTab();
+    if (!tab.subTabs || tab.subTabs.length === 0) {
+      return null;
+    }
+    const index = this.getSubTabIndexForKey(tab.key, tab.subTabs.length);
+    return tab.subTabs[index] ?? null;
+  }
+
+  private getCurrentSections(): SettingsSection[] {
+    const subTab = this.getCurrentSubTab();
+    return subTab?.sections ?? [];
+  }
+
+  private hasSections(subTab: SettingsSubTab | null = this.getCurrentSubTab()) {
+    return Boolean(subTab && subTab.sections && subTab.sections.length > 0);
+  }
+
+  private getCurrentSectionIndex() {
+    const tab = this.getCurrentTab();
+    const subTab = this.getCurrentSubTab();
+    if (!tab || !subTab || !subTab.sections || subTab.sections.length === 0) {
+      return 0;
+    }
+    return this.getSectionIndexForKey(tab.key, subTab.key, subTab.sections.length);
+  }
+
+  private getCurrentSubTabIndex() {
+    const tab = this.getCurrentTab();
+    if (!tab.subTabs || tab.subTabs.length === 0) {
+      return 0;
+    }
+    return this.getSubTabIndexForKey(tab.key, tab.subTabs.length);
+  }
+
+  private changeSubTab(delta: number) {
+    const tab = this.getCurrentTab();
+    const subTabs = tab.subTabs ?? [];
+    if (subTabs.length === 0) return;
+    const next = (this.getCurrentSubTabIndex() + delta + subTabs.length) % subTabs.length;
+    this.subTabIndices[tab.key] = next;
+    const subTab = subTabs[next];
+    if (subTab?.sections && subTab.sections.length > 0) {
+      this.getSectionIndexForKey(tab.key, subTab.key, subTab.sections.length);
+    }
+    this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+    this.tabFocus = false;
+    this.sectionFocus = false;
+    this.message = null;
+    this.draw();
+  }
+
+  private selectSubTab(index: number) {
+    const tab = this.getCurrentTab();
+    const subTabs = tab.subTabs ?? [];
+    if (subTabs.length === 0) return;
+    const clamped = Math.max(0, Math.min(index, subTabs.length - 1));
+    this.subTabIndices[tab.key] = clamped;
+    const subTab = subTabs[clamped];
+    if (subTab?.sections && subTab.sections.length > 0) {
+      this.getSectionIndexForKey(tab.key, subTab.key, subTab.sections.length);
+    }
+    this.tabFocus = false;
+    this.subTabFocus = false;
+    this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+    this.message = null;
+    this.draw();
+  }
+
+  private getSubTabIndexForKey(key: SettingsTabKey, count: number) {
+    if (count <= 0) {
+      delete this.subTabIndices[key];
+      return 0;
+    }
+    const saved = this.subTabIndices[key];
+    const normalized = typeof saved === 'number' && saved >= 0 && saved < count ? saved : 0;
+    this.subTabIndices[key] = normalized;
+    return normalized;
+  }
+
+  private changeSection(delta: number) {
+    const tab = this.getCurrentTab();
+    const subTab = this.getCurrentSubTab();
+    const sections = subTab?.sections ?? [];
+    if (!tab || !subTab || sections.length === 0) return;
+    const next = (this.getCurrentSectionIndex() + delta + sections.length) % sections.length;
+    this.setSectionIndex(tab.key, subTab.key, next, sections.length);
+    this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+    this.tabFocus = false;
+    this.subTabFocus = false;
+    this.message = null;
+    this.draw();
+  }
+
+  private selectSection(index: number) {
+    const tab = this.getCurrentTab();
+    const subTab = this.getCurrentSubTab();
+    const sections = subTab?.sections ?? [];
+    if (!tab || !subTab || sections.length === 0) return;
+    const clamped = Math.max(0, Math.min(index, sections.length - 1));
+    this.setSectionIndex(tab.key, subTab.key, clamped, sections.length);
+    this.sectionFocus = false;
+    this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+    this.message = null;
+    this.draw();
+  }
+
+  private getSectionIndexForKey(tabKey: SettingsTabKey, subKey: string, count: number) {
+    if (count <= 0) {
+      delete this.sectionIndices[this.getSectionStorageKey(tabKey, subKey)];
+      return 0;
+    }
+    const key = this.getSectionStorageKey(tabKey, subKey);
+    const saved = this.sectionIndices[key];
+    const normalized = typeof saved === 'number' && saved >= 0 && saved < count ? saved : 0;
+    this.sectionIndices[key] = normalized;
+    return normalized;
+  }
+
+  private setSectionIndex(tabKey: SettingsTabKey, subKey: string, value: number, count: number) {
+    if (count <= 0) {
+      delete this.sectionIndices[this.getSectionStorageKey(tabKey, subKey)];
+      return;
+    }
+    const normalized = ((value % count) + count) % count;
+    this.sectionIndices[this.getSectionStorageKey(tabKey, subKey)] = normalized;
+  }
+
+  private getSectionStorageKey(tabKey: SettingsTabKey, subKey: string) {
+    return `${tabKey}:${subKey}`;
+  }
+
   private getFirstSelectableIndex(tabIndex: number) {
-    const items = SETTINGS_TABS[tabIndex]?.items ?? [];
+    const items = this.getItemsForTab(tabIndex);
     const idx = items.findIndex((item) => item.type !== 'label');
     return idx === -1 ? 0 : idx;
   }
 
   private tabHasSelectableSettings(tabIndex: number) {
-    const items = SETTINGS_TABS[tabIndex]?.items ?? [];
+    const items = this.getItemsForTab(tabIndex);
     return items.some((item) => item.type !== 'label');
   }
 }

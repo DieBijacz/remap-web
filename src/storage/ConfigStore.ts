@@ -1,3 +1,5 @@
+import type { RGBColor } from '../config/colorPresets';
+
 const CONFIG_KEY = 'remap:config';
 
 export type Config = {
@@ -27,6 +29,7 @@ export type Config = {
   mechanicEnableJoystick?: boolean;
   nameEntryMode?: 'slots' | 'keyboard';
   symbolTheme?: 'classic' | 'pacman';
+  symbolColors?: RGBColor[];
 };
 
 export default class ConfigStore {

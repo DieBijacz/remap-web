@@ -8,6 +8,12 @@ import {
   type SymbolTheme,
   type SymbolType
 } from '../../render/Symbols';
+import {
+  DEFAULT_SYMBOL_COLORS,
+  cloneColor,
+  sanitizeSymbolColors,
+  type RGBColor
+} from '../../config/colorPresets';
 
 export interface MenuActions {
   onStart: () => void;
@@ -43,6 +49,7 @@ export class MenuScreen {
     symbolTheme: 'classic',
     menuSymbolCount: 24
   };
+  private colorPool: RGBColor[] = DEFAULT_SYMBOL_COLORS.map(cloneColor);
 
   constructor(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) {
     this.canvas = canvas;
@@ -54,6 +61,7 @@ export class MenuScreen {
     const rawCount = typeof values.menuSymbolCount === 'number' ? values.menuSymbolCount : this.visualConfig.menuSymbolCount;
     const nextCount = clamp(Math.round(rawCount ?? 24), MIN_SYMBOLS, MAX_SYMBOLS);
     const themeChanged = nextTheme !== this.visualConfig.symbolTheme;
+    this.colorPool = sanitizeSymbolColors(values.symbolColors);
     this.visualConfig = {
       symbolTheme: nextTheme,
       menuSymbolCount: nextCount
@@ -62,6 +70,10 @@ export class MenuScreen {
       this.symbols = [];
     } else if (this.symbols.length > nextCount) {
       this.symbols = this.symbols.slice(0, nextCount);
+    } else {
+      this.symbols.forEach((symbol) => {
+        symbol.color = this.pickSymbolColor();
+      });
     }
   }
 
@@ -140,6 +152,13 @@ export class MenuScreen {
     if (this.symbols.length > desired) {
       this.symbols.splice(0, this.symbols.length - desired);
     }
+  }
+
+  private pickSymbolColor(): RGBColor {
+    const pool = this.colorPool.length > 0 ? this.colorPool : DEFAULT_SYMBOL_COLORS;
+    const idx = Math.floor(Math.random() * pool.length);
+    const color = pool[idx] ?? DEFAULT_SYMBOL_COLORS[0];
+    return cloneColor(color);
   }
 
   private updateSymbols(dt: number, width: number, height: number) {
@@ -289,7 +308,8 @@ export class MenuScreen {
       vy: Math.sin(angle) * speed,
       rotation: randBetween(0, Math.PI * 2),
       rotationSpeed,
-      scale
+      scale,
+      color: this.pickSymbolColor()
     };
   }
 }

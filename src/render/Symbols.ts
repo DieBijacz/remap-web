@@ -1,3 +1,6 @@
+import type { RGBColor } from '../config/colorPresets';
+import { mixColors, rgbToCss, rgbToHex } from '../config/colorPresets';
+
 export type SymbolTheme = 'classic' | 'pacman';
 
 export type SymbolType =
@@ -16,6 +19,7 @@ export interface Symbol {
   y: number;
   scale: number;
   rotation: number;
+  color?: RGBColor;
 }
 
 export const createSymbol = (x: number, y: number, type: SymbolType): Symbol => ({
@@ -31,15 +35,38 @@ export const SYMBOL_THEME_SETS: Record<SymbolTheme, SymbolType[]> = {
   pacman: ['pacman', 'ghost-pink', 'ghost-blue', 'ghost-orange']
 };
 
-export const SYMBOL_PALETTES: Record<SymbolType, { glow: string; inner: string; ambient: string }> = {
-  square: { glow: '#ffd95a', inner: '#fff9e6', ambient: 'rgba(255, 217, 90, 0.35)' },
-  circle: { glow: '#ff63c0', inner: '#ffe6f8', ambient: 'rgba(255, 99, 192, 0.32)' },
-  triangle: { glow: '#4fe49b', inner: '#edfff6', ambient: 'rgba(79, 228, 155, 0.30)' },
-  cross: { glow: '#59b8ff', inner: '#ecf6ff', ambient: 'rgba(89, 184, 255, 0.28)' },
-  pacman: { glow: '#f8d94a', inner: '#fff4c4', ambient: 'rgba(248, 217, 74, 0.34)' },
-  'ghost-pink': { glow: '#ff5ae0', inner: '#ffe6fb', ambient: 'rgba(255, 90, 224, 0.30)' },
-  'ghost-blue': { glow: '#4fb8ff', inner: '#e6f4ff', ambient: 'rgba(79, 184, 255, 0.28)' },
-  'ghost-orange': { glow: '#ff9b4a', inner: '#ffeddc', ambient: 'rgba(255, 155, 74, 0.32)' }
+type PaletteColors = { glow: string; inner: string; ambient: string; base: string };
+
+export const SYMBOL_PALETTES: Record<SymbolType, PaletteColors> = {
+  square: { glow: '#ffd95a', inner: '#fff9e6', ambient: 'rgba(255, 217, 90, 0.35)', base: '#ffd95a' },
+  circle: { glow: '#ff63c0', inner: '#ffe6f8', ambient: 'rgba(255, 99, 192, 0.32)', base: '#ff63c0' },
+  triangle: { glow: '#4fe49b', inner: '#edfff6', ambient: 'rgba(79, 228, 155, 0.30)', base: '#4fe49b' },
+  cross: { glow: '#59b8ff', inner: '#ecf6ff', ambient: 'rgba(89, 184, 255, 0.28)', base: '#59b8ff' },
+  pacman: { glow: '#f8d94a', inner: '#fff4c4', ambient: 'rgba(248, 217, 74, 0.34)', base: '#f8d94a' },
+  'ghost-pink': { glow: '#ff5ae0', inner: '#ffe6fb', ambient: 'rgba(255, 90, 224, 0.30)', base: '#ff5ae0' },
+  'ghost-blue': { glow: '#4fb8ff', inner: '#e6f4ff', ambient: 'rgba(79, 184, 255, 0.28)', base: '#4fb8ff' },
+  'ghost-orange': { glow: '#ff9b4a', inner: '#ffeddc', ambient: 'rgba(255, 155, 74, 0.32)', base: '#ff9b4a' }
+};
+
+const WHITE: RGBColor = { r: 255, g: 255, b: 255 };
+
+const buildPaletteFromColor = (color: RGBColor): PaletteColors => {
+  const glowColor = mixColors(color, WHITE, 0.2);
+  const innerColor = mixColors(color, WHITE, 0.4);
+  const ambientColor = mixColors(color, WHITE, 0.05);
+  return {
+    glow: rgbToHex(glowColor),
+    inner: rgbToHex(innerColor),
+    ambient: rgbToCss(ambientColor, 0.35),
+    base: rgbToHex(color)
+  };
+};
+
+export const getSymbolPalette = (symbol: { type: SymbolType; color?: RGBColor }): PaletteColors => {
+  if (symbol.color) {
+    return buildPaletteFromColor(symbol.color);
+  }
+  return SYMBOL_PALETTES[symbol.type] ?? SYMBOL_PALETTES.triangle;
 };
 
 const isGhostType = (type: SymbolType): type is 'ghost-pink' | 'ghost-blue' | 'ghost-orange' =>
@@ -116,7 +143,7 @@ export const drawSymbol = (
   strokeScale: number = 1
 ) => {
   const { x, y, scale, rotation, type } = symbol;
-  const palette = SYMBOL_PALETTES[type];
+  const palette = getSymbolPalette(symbol);
   const size = 46 * scale;
   const isGhost = isGhostType(type);
   const isPacman = type === 'pacman';

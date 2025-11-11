@@ -32,14 +32,42 @@ export type SettingItem =
       action: 'resetHighscore';
       label: string;
       description?: string;
+    }
+  | {
+      type: 'color';
+      key: 'symbolColors';
+      label: string;
+      index: number;
+      step?: number;
+    }
+  | {
+      type: 'color';
+      key: 'symbolColors';
+      label: string;
+      index: number;
+      step?: number;
     };
 
 export type SettingsTabKey = 'gameplay' | 'mechanics' | 'visual' | 'system';
 
+export type SettingsSection = {
+  key: string;
+  label: string;
+  items: SettingItem[];
+};
+
+export type SettingsSubTab = {
+  key: string;
+  label: string;
+  items?: SettingItem[];
+  sections?: SettingsSection[];
+};
+
 export type SettingsTab = {
   key: SettingsTabKey;
   label: string;
-  items: SettingItem[];
+  items?: SettingItem[];
+  subTabs?: SettingsSubTab[];
 };
 
 export const SETTINGS_TABS: SettingsTab[] = [
@@ -140,91 +168,188 @@ export const SETTINGS_TABS: SettingsTab[] = [
   {
     key: 'visual',
     label: 'Visual Effects',
-    items: [
+    subTabs: [
       {
-        type: 'number',
-        key: 'ringRadiusFactor',
-        label: 'Ring Radius',
-        min: 0.08,
-        max: 0.26,
-        step: 0.01,
-        format: (v) => `${Math.round(v * 100)}% width`
+        key: 'symbols',
+        label: 'Symbols',
+        sections: [
+          {
+            key: 'general',
+            label: 'General',
+            items: [
+              {
+                type: 'number',
+                key: 'ringRadiusFactor',
+                label: 'Ring Radius',
+                min: 0.08,
+                max: 0.26,
+                step: 0.01,
+                format: (v) => `${Math.round(v * 100)}% width`
+              },
+              {
+                type: 'cycle',
+                key: 'symbolTheme',
+                label: 'Symbol Theme',
+                options: ['classic', 'pacman'],
+                format: (value) => (value === 'pacman' ? 'Pac-Man' : 'Classic')
+              },
+              {
+                type: 'label',
+                label: 'Animated Menu'
+              },
+              {
+                type: 'number',
+                key: 'menuSymbolCount',
+                label: 'Menu Symbols',
+                min: 4,
+                max: 60,
+                step: 1,
+                format: (v) => `${Math.round(v)}`
+              },
+              {
+                type: 'number',
+                key: 'symbolScale',
+                label: 'Symbol Size',
+                min: 0.6,
+                max: 1.6,
+                step: 0.05,
+                format: (v) => `${Math.round(v * 100)}%`
+              },
+              {
+                type: 'number',
+                key: 'symbolStroke',
+                label: 'Symbol Outline',
+                min: 0.5,
+                max: 1.8,
+                step: 0.05,
+                format: (v) => `${v.toFixed(2)}x`
+              }
+            ]
+          },
+          {
+            key: 'colors',
+            label: 'Colors',
+            items: [
+              {
+                type: 'color',
+                key: 'symbolColors',
+                label: 'Red',
+                index: 0,
+                step: 5
+              },
+              {
+                type: 'color',
+                key: 'symbolColors',
+                label: 'Magenta',
+                index: 1,
+                step: 5
+              },
+              {
+                type: 'color',
+                key: 'symbolColors',
+                label: 'Cyan',
+                index: 2,
+                step: 5
+              },
+              {
+                type: 'color',
+                key: 'symbolColors',
+                label: 'Dark Blue',
+                index: 3,
+                step: 5
+              },
+              {
+                type: 'color',
+                key: 'symbolColors',
+                label: 'Gold',
+                index: 4,
+                step: 5
+              },
+              {
+                type: 'color',
+                key: 'symbolColors',
+                label: 'Green',
+                index: 5,
+                step: 5
+              },
+              {
+                type: 'color',
+                key: 'symbolColors',
+                label: 'Mint',
+                index: 6,
+                step: 5
+              },
+              {
+                type: 'color',
+                key: 'symbolColors',
+                label: 'Amber',
+                index: 7,
+                step: 5
+              },
+              {
+                type: 'color',
+                key: 'symbolColors',
+                label: 'Violet',
+                index: 8,
+                step: 5
+              }
+            ]
+          }
+        ]
       },
       {
-        type: 'cycle',
-        key: 'symbolTheme',
-        label: 'Symbol Theme',
-        options: ['classic', 'pacman'],
-        format: (value) => (value === 'pacman' ? 'Pac-Man' : 'Classic')
+        key: 'particles',
+        label: 'Particles',
+        items: [
+          {
+            type: 'number',
+            key: 'particlesPerScore',
+            label: 'Particles per Hit',
+            min: 0,
+            max: 20,
+            step: 1,
+            format: (v) => `${Math.round(v)}`
+          },
+          {
+            type: 'toggle',
+            key: 'particlesPersist',
+            label: 'Keep Orbiting',
+            format: (value) => (value ? 'On' : 'Off')
+          }
+        ]
       },
       {
-        type: 'number',
-        key: 'menuSymbolCount',
-        label: 'Menu Symbols',
-        min: 4,
-        max: 60,
-        step: 1,
-        format: (v) => `${Math.round(v)}`
-      },
-      {
-        type: 'number',
-        key: 'symbolScale',
-        label: 'Symbol Size',
-        min: 0.6,
-        max: 1.6,
-        step: 0.05,
-        format: (v) => `${Math.round(v * 100)}%`
-      },
-      {
-        type: 'number',
-        key: 'symbolStroke',
-        label: 'Symbol Outline',
-        min: 0.5,
-        max: 1.8,
-        step: 0.05,
-        format: (v) => `${v.toFixed(2)}x`
-      },
-      {
-        type: 'number',
-        key: 'particlesPerScore',
-        label: 'Particles per Hit',
-        min: 0,
-        max: 20,
-        step: 1,
-        format: (v) => `${Math.round(v)}`
-      },
-      {
-        type: 'toggle',
-        key: 'particlesPersist',
-        label: 'Keep Orbiting',
-        format: (value) => (value ? 'On' : 'Off')
-      },
-      {
-        type: 'number',
-        key: 'scoreRayCount',
-        label: 'Ray Lines',
-        min: 0,
-        max: 12,
-        step: 1,
-        format: (v) => `${Math.round(v)}`
-      },
-      {
-        type: 'number',
-        key: 'scoreRayThickness',
-        label: 'Ray Thickness',
-        min: 0.2,
-        max: 3,
-        step: 0.1,
-        format: (v) => `${v.toFixed(1)}x`
-      },
-      {
-        type: 'number',
-        key: 'scoreRayIntensity',
-        label: 'Ray Intensity',
-        min: 0.3,
-        max: 2.5,
-        step: 0.1,
-        format: (v) => `${v.toFixed(1)}x`
+        key: 'rays',
+        label: 'Rays',
+        items: [
+          {
+            type: 'number',
+            key: 'scoreRayCount',
+            label: 'Ray Lines',
+            min: 0,
+            max: 12,
+            step: 1,
+            format: (v) => `${Math.round(v)}`
+          },
+          {
+            type: 'number',
+            key: 'scoreRayThickness',
+            label: 'Ray Thickness',
+            min: 0.2,
+            max: 3,
+            step: 0.1,
+            format: (v) => `${v.toFixed(1)}x`
+          },
+          {
+            type: 'number',
+            key: 'scoreRayIntensity',
+            label: 'Ray Intensity',
+            min: 0.3,
+            max: 2.5,
+            step: 0.1,
+            format: (v) => `${v.toFixed(1)}x`
+          }
+        ]
       }
     ]
   },

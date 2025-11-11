@@ -2,7 +2,7 @@ import { Clock, PausableTime } from '../core/Clock';
 import { Renderer2D } from '../render/Renderer2D';
 import { AnimationTimeline, easeOutCubic } from '../core/Animation';
 import { Timer } from '../core/Timer';
-import { drawSymbol, SYMBOL_PALETTES, SYMBOL_THEME_SETS } from '../render/Symbols';
+import { drawSymbol, getSymbolPalette, SYMBOL_THEME_SETS } from '../render/Symbols';
 import type { Symbol, SymbolType, SymbolTheme } from '../render/Symbols';
 import type { InputHandler } from '../input/InputManager';
 import { InputManager } from '../input/InputManager';
@@ -14,6 +14,7 @@ import wrongSfxUrl from '../audio/sfx/sfx_wrong.wav';
 import HighscoreStore, { type HighscoreEntry } from '../storage/HighscoreStore';
 import ConfigStore from '../storage/ConfigStore';
 import type { Config as PersistentConfig } from '../storage/ConfigStore';
+import { DEFAULT_SYMBOL_COLORS, cloneColor, sanitizeSymbolColors, type RGBColor } from '../config/colorPresets';
 
 const BASE_RING_SYMBOL_SCALE = 1.22;
 const BASE_CENTER_SCALE = 1.85;
@@ -276,6 +277,8 @@ export class Game implements InputHandler {
   private centerScale = BASE_CENTER_SCALE;
   private symbolStrokeScale = 1;
   private symbolTheme: SymbolTheme = 'classic';
+  private symbolColorPool: RGBColor[] = DEFAULT_SYMBOL_COLORS.map(cloneColor);
+  private centerSymbolColor: RGBColor = cloneColor(DEFAULT_SYMBOL_COLORS[0]);
   private centerOpacity = 1;
   private playfieldCenter = { x: 0, y: 0 };
   private lastRingCenter = { x: 0, y: 0 };
@@ -393,14 +396,15 @@ export class Game implements InputHandler {
     if (order.length === 0) {
       return;
     }
-    if (this.symbols.length > 0) {
-      this.symbols.forEach((symbol, index) => {
-        symbol.type = order[index % order.length] ?? symbol.type;
-        symbol.scale = this.ringSymbolScale;
-        symbol.rotation = this.ringRotationOffset;
-      });
-      const nextCenter = order[this.currentTargetIndex % order.length] ?? order[0];
-      this.applyCenterSymbol(nextCenter, { resetVisual: false });
+      if (this.symbols.length > 0) {
+        this.symbols.forEach((symbol, index) => {
+          symbol.type = order[index % order.length] ?? symbol.type;
+          symbol.scale = this.ringSymbolScale;
+          symbol.rotation = this.ringRotationOffset;
+          this.assignSymbolColor(symbol);
+        });
+        const nextCenter = order[this.currentTargetIndex % order.length] ?? order[0];
+        this.applyCenterSymbol(nextCenter, { resetVisual: false });
       if (this.activeMechanics.includes('remap')) {
         this.rollRemapMapping();
       } else {
@@ -428,6 +432,26 @@ export class Game implements InputHandler {
     }
     const idx = Math.floor(Math.random() * items.length);
     return items[idx] ?? fallback;
+  }
+
+  private getRandomSymbolColor(): RGBColor {
+    const pool = this.symbolColorPool.length > 0 ? this.symbolColorPool : DEFAULT_SYMBOL_COLORS;
+    const idx = Math.floor(Math.random() * pool.length);
+    const source = pool[idx] ?? DEFAULT_SYMBOL_COLORS[0];
+    return cloneColor(source);
+  }
+
+  private assignSymbolColor(symbol: Symbol, color?: RGBColor) {
+    const base = color ?? this.getRandomSymbolColor();
+    symbol.color = cloneColor(base);
+  }
+
+  private getColorForSymbolType(type: SymbolType): RGBColor {
+    const match = this.symbols.find((symbol) => symbol.type === type && symbol.color);
+    if (match && match.color) {
+      return cloneColor(match.color);
+    }
+    return this.getRandomSymbolColor();
   }
 
   private shuffleArray<T>(source: T[]): T[] {
@@ -478,6 +502,7 @@ export class Game implements InputHandler {
       symbol.type = type;
       symbol.scale = this.ringSymbolScale;
       symbol.rotation = 0;
+      this.assignSymbolColor(symbol);
     });
     this.updateRingLayout();
   }
@@ -496,6 +521,7 @@ export class Game implements InputHandler {
         symbol.type = shuffledTypes[index] ?? symbol.type;
         symbol.scale = this.ringSymbolScale;
         symbol.rotation = 0;
+        this.assignSymbolColor(symbol);
       });
     this.updateRingLayout();
   }
@@ -545,6 +571,7 @@ export class Game implements InputHandler {
     if (!state.swapDone && progress >= state.swapAt) {
       this.symbols.forEach((symbol, index) => {
         symbol.type = state.targetTypes[index] ?? symbol.type;
+        this.assignSymbolColor(symbol);
       });
       state.swapDone = true;
     }
@@ -899,6 +926,12 @@ export class Game implements InputHandler {
     this.centerSymbol = next;
     const matchIdx = this.symbols.findIndex((symbol) => symbol.type === next);
     this.currentTargetIndex = matchIdx >= 0 ? matchIdx : 0;
+    if (matchIdx >= 0) {
+      const matchSymbol = this.symbols[matchIdx];
+      this.centerSymbolColor = matchSymbol?.color ? cloneColor(matchSymbol.color) : this.getRandomSymbolColor();
+    } else {
+      this.centerSymbolColor = this.getRandomSymbolColor();
+    }
     const { x: cx, y: cy } = this.getCanvasCenter();
     this.centerPos.x = cx;
     this.centerPos.y = cy;
@@ -1003,6 +1036,7 @@ export class Game implements InputHandler {
       merged.minTimeBonus = merged.maxTimeBonus;
     }
     this.config = merged;
+    this.symbolColorPool = sanitizeSymbolColors(data.symbolColors);
 
     this.ringSymbolScale = BASE_RING_SYMBOL_SCALE * merged.symbolScale;
     this.centerBaseScale = BASE_CENTER_SCALE * merged.symbolScale;
@@ -1010,6 +1044,9 @@ export class Game implements InputHandler {
     this.centerScale = this.centerBaseScale;
     this.symbolStrokeScale = merged.symbolStroke;
     this.applySymbolTheme(themeSetting);
+    if (!this.symbols.length) {
+      this.centerSymbolColor = this.getRandomSymbolColor();
+    }
 
     if (this.symbols.length > 0) {
       this.symbols.forEach((symbol) => {
@@ -1422,7 +1459,7 @@ export class Game implements InputHandler {
   private triggerScoreParticles(ringSymbol: Symbol) {
     if (!this.particlesEnabled || this.particleDensity <= 0) return;
 
-    const palette = SYMBOL_PALETTES[ringSymbol.type];
+    const palette = getSymbolPalette(ringSymbol);
     const center = this.getCanvasCenter();
     const ringRadius = this.getRingRadius();
     const intensity = 1 + Math.min(this.streak, 20) * 0.08;
@@ -1444,7 +1481,7 @@ export class Game implements InputHandler {
   private triggerScoreCelebration(ringSymbol: Symbol) {
     this.scorePulseTimer = SCORE_PULSE_DURATION;
     const target = this.getScoreAnchor();
-    const palette = SYMBOL_PALETTES[ringSymbol.type];
+    const palette = getSymbolPalette(ringSymbol);
     this.scorePulseColor = palette.glow;
 
     if (!this.scoreTracerEnabled) {
@@ -1556,13 +1593,17 @@ export class Game implements InputHandler {
     const positions = this.computeRingPositions(0);
     const themeOrder = this.getThemeSymbolSet();
     const baseTypes = (themeOrder.length > 0 ? themeOrder : SYMBOL_THEME_SETS.classic).slice(0, positions.length);
-    this.symbols = positions.map((pos, index) => ({
-      type: baseTypes[index % baseTypes.length] ?? (themeOrder[0] ?? SYMBOL_THEME_SETS.classic[0]),
-      x: pos.x,
-      y: pos.y,
-      scale: this.ringSymbolScale,
-      rotation: 0
-    }));
+    this.symbols = positions.map((pos, index) => {
+      const symbol: Symbol = {
+        type: baseTypes[index % baseTypes.length] ?? (themeOrder[0] ?? SYMBOL_THEME_SETS.classic[0]),
+        x: pos.x,
+        y: pos.y,
+        scale: this.ringSymbolScale,
+        rotation: 0
+      };
+      this.assignSymbolColor(symbol);
+      return symbol;
+    });
 
     this.ringRotationOffset = 0;
     this.spinState = null;
@@ -1912,7 +1953,14 @@ export class Game implements InputHandler {
     // Draw center prompt symbol larger in the middle (may be animating)
     const centerX = this.centerPos.x || r.w / 2;
     const centerY = this.centerPos.y || r.h / 2;
-    const centerSym: Symbol = { type: this.centerSymbol, x: centerX, y: centerY, scale: this.centerScale, rotation: 0 };
+    const centerSym: Symbol = {
+      type: this.centerSymbol,
+      x: centerX,
+      y: centerY,
+      scale: this.centerScale,
+      rotation: 0,
+      color: this.centerSymbolColor
+    };
     r.ctx.save();
     r.ctx.globalAlpha = this.centerOpacity;
     drawSymbol(r.ctx, centerSym, true, this.symbolStrokeScale);
@@ -2139,8 +2187,22 @@ export class Game implements InputHandler {
       cursor += arrowWidth + spacing;
       const rightX = cursor + symbolSize / 2;
 
-      const leftSymbol: Symbol = { type: this.remapMapping.from, x: leftX, y: mappingCenterY, scale: rowScale, rotation: 0 };
-      const rightSymbol: Symbol = { type: this.remapMapping.to, x: rightX, y: mappingCenterY, scale: rowScale, rotation: 0 };
+      const leftSymbol: Symbol = {
+        type: this.remapMapping.from,
+        x: leftX,
+        y: mappingCenterY,
+        scale: rowScale,
+        rotation: 0,
+        color: this.getColorForSymbolType(this.remapMapping.from)
+      };
+      const rightSymbol: Symbol = {
+        type: this.remapMapping.to,
+        x: rightX,
+        y: mappingCenterY,
+        scale: rowScale,
+        rotation: 0,
+        color: this.getColorForSymbolType(this.remapMapping.to)
+      };
       const bannerStroke = Math.max(0.4, this.symbolStrokeScale * 0.85);
       drawSymbol(ctx, leftSymbol, true, bannerStroke);
       drawSymbol(ctx, rightSymbol, true, bannerStroke);
