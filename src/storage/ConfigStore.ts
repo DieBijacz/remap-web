@@ -30,6 +30,8 @@ export type Config = {
   mechanicEnableSpin?: boolean;
   mechanicEnableMemory?: boolean;
   mechanicEnableJoystick?: boolean;
+  mechanicEnableMatchColor?: boolean;
+  mechanicEnableMatchShape?: boolean;
   nameEntryMode?: 'slots' | 'keyboard';
   symbolTheme?: 'classic' | 'pacman';
   symbolColors?: RGBColor[];

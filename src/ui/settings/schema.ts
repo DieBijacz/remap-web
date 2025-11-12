@@ -162,6 +162,18 @@ export const SETTINGS_TABS: SettingsTab[] = [
         key: 'mechanicEnableJoystick',
         label: 'Joystick Mechanic',
         format: (value) => (value ? 'On' : 'Off')
+      },
+      {
+        type: 'toggle',
+        key: 'mechanicEnableMatchColor',
+        label: 'Match Color Mechanic',
+        format: (value) => (value ? 'On' : 'Off')
+      },
+      {
+        type: 'toggle',
+        key: 'mechanicEnableMatchShape',
+        label: 'Match Shape Mechanic',
+        format: (value) => (value ? 'On' : 'Off')
       }
     ]
   },

@@ -113,6 +113,8 @@ export class App {
       mechanicEnableSpin: persistedConfig.mechanicEnableSpin ?? true,
       mechanicEnableMemory: persistedConfig.mechanicEnableMemory ?? true,
       mechanicEnableJoystick: persistedConfig.mechanicEnableJoystick ?? true,
+      mechanicEnableMatchColor: persistedConfig.mechanicEnableMatchColor ?? true,
+      mechanicEnableMatchShape: persistedConfig.mechanicEnableMatchShape ?? true,
       nameEntryMode: nameEntryModeDefault
     };
     this.configStore.save(settingsValues);
