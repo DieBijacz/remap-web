@@ -259,7 +259,11 @@ export class SettingsScreen {
 
       ctx.textAlign = 'left';
       ctx.font = `${labelSize}px Orbitron, sans-serif`;
-      ctx.fillStyle = isSelected ? '#cdd7ff' : '#9aa5be';
+      let labelColor = isSelected ? '#cdd7ff' : '#9aa5be';
+      if (item.type === 'label' && item.color) {
+        labelColor = item.color;
+      }
+      ctx.fillStyle = labelColor;
       ctx.fillText(item.label, marginX, displayY);
 
       if (item.type === 'number') {

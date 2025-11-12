@@ -13,6 +13,7 @@ export type Config = {
   menuSymbolBaseSizeVW?: number;
   menuSymbolSizeVariancePct?: number;
   menuSymbolGrowthMultiplier?: number;
+  menuSymbolSpeedMultiplier?: number;
   minTimeBonus?: number;
   mechanicInterval?: number;
   difficulty?: 'easy' | 'medium' | 'hard' | 'progressive';

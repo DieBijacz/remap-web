@@ -37,6 +37,7 @@ type MenuVisualConfig = {
   menuSymbolBaseSizeVW: number;
   menuSymbolSizeVariancePct: number;
   menuSymbolGrowthMultiplier: number;
+  menuSymbolSpeedMultiplier: number;
 };
 
 const MIN_SYMBOLS = 4;
@@ -61,7 +62,8 @@ export class MenuScreen {
     menuSymbolCount: 24,
     menuSymbolBaseSizeVW: 6,
     menuSymbolSizeVariancePct: 30,
-    menuSymbolGrowthMultiplier: 4.5
+    menuSymbolGrowthMultiplier: 4.5,
+    menuSymbolSpeedMultiplier: 1
   };
   private colorPool: RGBColor[] = DEFAULT_SYMBOL_COLORS.map(cloneColor);
 
@@ -97,6 +99,13 @@ export class MenuScreen {
           : this.visualConfig.menuSymbolGrowthMultiplier,
         1,
         30
+      ),
+      menuSymbolSpeedMultiplier: clamp(
+        typeof values.menuSymbolSpeedMultiplier === 'number'
+          ? values.menuSymbolSpeedMultiplier
+          : this.visualConfig.menuSymbolSpeedMultiplier,
+        0.3,
+        2.5
       )
     };
     this.symbols = [];
@@ -308,8 +317,9 @@ export class MenuScreen {
     const exitMargin = Math.max(width, height) * 0.4 + 120;
     const startX = randBetween(width * 0.05, width * 0.95);
     const startY = height + randBetween(overshoot, overshoot * 2.2);
-    const verticalSpeed = randBetween(height * 0.18, height * 0.28);
-    const horizontalDrift = randBetween(-width * 0.12, width * 0.12);
+    const speedMultiplier = this.visualConfig.menuSymbolSpeedMultiplier;
+    const verticalSpeed = randBetween(height * 0.18, height * 0.28) * speedMultiplier;
+    const horizontalDrift = randBetween(-width * 0.12, width * 0.12) * speedMultiplier;
 
     const baseSizeVW = this.visualConfig.menuSymbolBaseSizeVW;
     const baseSizePx = Math.max(4, width * (baseSizeVW / 100));
@@ -325,8 +335,9 @@ export class MenuScreen {
 
     const travelDistance = startY + exitMargin + endScale * 50;
     const life = Math.max(2.5, travelDistance / verticalSpeed);
-    const rotationSpeed = randBetween(-2.2, 2.2);
-    const spawnDelay = randBetween(0, Math.min(8, 0.3 * this.visualConfig.menuSymbolCount));
+    const rotationSpeed = randBetween(-2.2, 2.2) * speedMultiplier;
+    const spawnDelayRange = Math.min(8, 0.3 * this.visualConfig.menuSymbolCount);
+    const spawnDelay = randBetween(0, spawnDelayRange / Math.max(0.3, speedMultiplier));
 
     return {
       type: symbolType,

@@ -94,6 +94,7 @@ export class App {
       menuSymbolBaseSizeVW: persistedConfig.menuSymbolBaseSizeVW ?? 6,
       menuSymbolSizeVariancePct: persistedConfig.menuSymbolSizeVariancePct ?? 30,
       menuSymbolGrowthMultiplier: persistedConfig.menuSymbolGrowthMultiplier ?? 4.5,
+      menuSymbolSpeedMultiplier: persistedConfig.menuSymbolSpeedMultiplier ?? 1,
       minTimeBonus: persistedConfig.minTimeBonus ?? 0.5,
       mechanicInterval: persistedConfig.mechanicInterval ?? 10,
       mechanicRandomize: persistedConfig.mechanicRandomize ?? false,
