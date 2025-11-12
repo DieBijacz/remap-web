@@ -138,12 +138,6 @@ export const SETTINGS_TABS: SettingsTab[] = [
       },
       {
         type: 'toggle',
-        key: 'mechanicEnableSpin',
-        label: 'Spin Mechanic',
-        format: (value) => (value ? 'On' : 'Off')
-      },
-      {
-        type: 'toggle',
         key: 'mechanicEnableMemory',
         label: 'Memory Mechanic',
         format: (value) => (value ? 'On' : 'Off')

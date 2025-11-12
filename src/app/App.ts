@@ -110,7 +110,6 @@ export class App {
       scoreRayThickness: persistedConfig.scoreRayThickness ?? 1,
       scoreRayIntensity: persistedConfig.scoreRayIntensity ?? 1,
       mechanicEnableRemap: persistedConfig.mechanicEnableRemap ?? true,
-      mechanicEnableSpin: persistedConfig.mechanicEnableSpin ?? true,
       mechanicEnableMemory: persistedConfig.mechanicEnableMemory ?? true,
       mechanicEnableJoystick: persistedConfig.mechanicEnableJoystick ?? true,
       mechanicEnableMatchColor: persistedConfig.mechanicEnableMatchColor ?? true,

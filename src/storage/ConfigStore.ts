@@ -27,7 +27,6 @@ export type Config = {
   scoreRayCount?: number;
   scoreRayIntensity?: number;
   mechanicEnableRemap?: boolean;
-  mechanicEnableSpin?: boolean;
   mechanicEnableMemory?: boolean;
   mechanicEnableJoystick?: boolean;
   mechanicEnableMatchColor?: boolean;

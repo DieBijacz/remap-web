@@ -37,7 +37,6 @@ type Direction = 'up' | 'right' | 'down' | 'left';
 type MechanicType =
   | 'none'
   | 'remap'
-  | 'spin'
   | 'memory'
   | 'joystick'
   | 'match-color'
@@ -57,7 +56,6 @@ const RING_BASE_ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
 const MECHANIC_COLORS: Record<MechanicType, string> = {
   none: '#9da7b3',
   remap: '#ec4899',
-  spin: '#fbbf24',
   memory: '#f87171',
   joystick: '#34d399',
   'match-color': '#f472b6',
@@ -164,21 +162,6 @@ const MECHANIC_RING_STYLES: Record<MechanicType, RingStyle[]> = {
       segments: makeSegments([0.02, 0.26], [0.52, 0.76])
     }
   ],
-  spin: [
-    {
-      radiusScale: 1.12,
-      thickness: 3.8,
-      glow: 14,
-      segments: makeSegments(
-        [0.0, 0.08],
-        [0.17, 0.25],
-        [0.34, 0.42],
-        [0.51, 0.59],
-        [0.68, 0.76],
-        [0.85, 0.93]
-      )
-    }
-  ],
   memory: [
     {
       radiusScale: 0.94,
@@ -233,7 +216,6 @@ const MECHANIC_RING_STYLES: Record<MechanicType, RingStyle[]> = {
 const MECHANIC_RING_SPEED: Record<MechanicType, number> = {
   none: 0,
   remap: 0.4,
-  spin: 1.45,
   memory: 0.32,
   joystick: 0.6,
   'match-color': 0.55,
@@ -249,11 +231,28 @@ interface SpinState {
   duration: number;
   swapAt: number;
   swapDone: boolean;
-  targetTypes: SymbolType[];
+  targetTypes?: SymbolType[];
   startRotation: number;
   targetRotation: number;
   spins: number;
   velocity: number;
+  onSwap?: (() => void) | null;
+}
+
+type RingAssignmentRole = 'correct' | 'bait' | 'filler';
+type RingAssignment = {
+  type: SymbolType;
+  color: RGBColor;
+  role: RingAssignmentRole;
+};
+
+interface RingLayoutPlan {
+  centerType: SymbolType;
+  centerColor: RGBColor;
+  correctIndex: number;
+  matchMode: MatchMechanicMode | null;
+  applied: boolean;
+  apply: () => void;
 }
 
 interface GameConfig {
@@ -348,6 +347,8 @@ export class Game implements InputHandler {
   private ringRotationOffset = 0;
   private spinState: SpinState | null = null;
   private spinState: SpinState | null = null;
+  private resolvingAnswer = false;
+  private pendingRingLayout: RingLayoutPlan | null = null;
   private lastMechanicSet: MechanicType[] = [];
   private particlesEnabled = true;
   private particlesPersist = false;
@@ -355,9 +356,8 @@ export class Game implements InputHandler {
   private scoreTracerCountSetting = SCORE_TRACER_COUNT;
   private scoreTracerThickness = 1;
   private scoreTracerIntensity = 1;
-  private mechanicEnabled: Record<'remap' | 'spin' | 'memory' | 'joystick' | 'match-color' | 'match-shape', boolean> = {
+  private mechanicEnabled: Record<'remap' | 'memory' | 'joystick' | 'match-color' | 'match-shape', boolean> = {
     remap: true,
-    spin: true,
     memory: true,
     joystick: true,
     'match-color': true,
@@ -369,7 +369,6 @@ export class Game implements InputHandler {
   private mechanicRingAngles: Record<MechanicType, number> = {
     none: 0,
     remap: 0,
-    spin: 0,
     memory: 0,
     joystick: 0,
     'match-color': 0,
@@ -511,7 +510,7 @@ export class Game implements InputHandler {
   }
 
   private getEnabledMechanicPool(): MechanicType[] {
-    const pool: Exclude<MechanicType, 'none'>[] = ['remap', 'spin', 'memory', 'joystick', 'match-color', 'match-shape'];
+    const pool: Exclude<MechanicType, 'none'>[] = ['remap', 'memory', 'joystick', 'match-color', 'match-shape'];
     return pool.filter((mechanic) => this.mechanicEnabled[mechanic]);
   }
 
@@ -555,26 +554,42 @@ export class Game implements InputHandler {
     this.updateRingLayout();
   }
 
-  private applySpinShuffle(opts?: { animate?: boolean }) {
+  private applySpinShuffle(opts?: { animate?: boolean; centerType?: SymbolType; matchModeOverride?: MatchMechanicMode | null }) {
     if (this.symbols.length === 0) return;
-    const currentTypes = this.symbols.map((symbol) => symbol.type);
-    const shuffledTypes = this.shuffleArray(currentTypes);
+    const targetCenter = opts?.centerType ?? this.centerSymbol;
+    const matchMode = opts?.matchModeOverride ?? this.getMatchMechanicMode();
+    const baseColor = targetCenter === this.centerSymbol ? this.centerSymbolColor : null;
+    const plan = this.buildRingLayoutPlan(targetCenter, matchMode, { baseColor });
+    if (!plan) return;
+
+    const applyPlanToRing = () => {
+      plan.apply();
+      if (targetCenter === this.centerSymbol) {
+        this.centerSymbolColor = cloneColor(plan.centerColor);
+        this.currentTargetIndex = plan.correctIndex;
+      }
+    };
+
     const animate = opts?.animate !== false;
     if (animate) {
-      this.startSpinAnimation(shuffledTypes);
+      if (targetCenter !== this.centerSymbol) {
+        this.pendingRingLayout = plan;
+      } else {
+        this.pendingRingLayout = null;
+      }
+      this.startSpinAnimation(undefined, { onSwap: () => applyPlanToRing() });
       return;
     }
-    this.cancelSpinAnimation(0);
-      this.symbols.forEach((symbol, index) => {
-        symbol.type = shuffledTypes[index] ?? symbol.type;
-        symbol.scale = this.ringSymbolScale;
-        symbol.rotation = 0;
-        this.assignSymbolColor(symbol);
-      });
-    this.updateRingLayout();
+
+    applyPlanToRing();
+    if (targetCenter !== this.centerSymbol) {
+      this.pendingRingLayout = plan;
+    } else {
+      this.pendingRingLayout = null;
+    }
   }
 
-  private startSpinAnimation(targetTypes: SymbolType[]) {
+  private startSpinAnimation(targetTypes?: SymbolType[], opts?: { onSwap?: () => void }) {
     if (this.symbols.length === 0) return;
     const duration = 0.9;
     const spins = 2.0;
@@ -590,7 +605,8 @@ export class Game implements InputHandler {
       startRotation,
       targetRotation,
       spins,
-      velocity: 0
+      velocity: 0,
+      onSwap: opts?.onSwap ?? null
     };
     this.spinState = state;
   }
@@ -617,10 +633,14 @@ export class Game implements InputHandler {
     state.velocity = angularVelocity;
 
     if (!state.swapDone && progress >= state.swapAt) {
-      this.symbols.forEach((symbol, index) => {
-        symbol.type = state.targetTypes[index] ?? symbol.type;
-        this.assignSymbolColor(symbol);
-      });
+      if (typeof state.onSwap === 'function') {
+        state.onSwap();
+      } else if (state.targetTypes) {
+        this.symbols.forEach((symbol, index) => {
+          symbol.type = state.targetTypes?.[index] ?? symbol.type;
+          this.assignSymbolColor(symbol);
+        });
+      }
       state.swapDone = true;
     }
 
@@ -693,72 +713,168 @@ export class Game implements InputHandler {
     return cloneColor(source);
   }
 
-  private applyMatchMechanicLayout(mode: MatchMechanicMode): number {
-    if (this.symbols.length === 0) {
-      this.centerSymbolColor = this.pickColorExcluding([]);
-      return 0;
-    }
-    const centerType = this.centerSymbol;
+  private getUniqueThemeTypes(): SymbolType[] {
     const themeTypes = this.getThemeSymbolSet();
-    const availableTypes = (themeTypes.length > 0 ? themeTypes : SYMBOL_THEME_SETS.classic).slice();
-    if (!availableTypes.includes(centerType)) {
-      availableTypes.unshift(centerType);
-    }
-    const otherTypes = availableTypes.filter((type) => type !== centerType);
-    const pickOtherType = (exclude: SymbolType[] = []): SymbolType => {
-      const filtered = otherTypes.filter((type) => !exclude.includes(type));
-      if (filtered.length > 0) {
-        return this.randomChoice(filtered, filtered[0]);
+    const base = themeTypes.length > 0 ? themeTypes : SYMBOL_THEME_SETS.classic;
+    const seen = new Set<SymbolType>();
+    const unique: SymbolType[] = [];
+    base.forEach((type) => {
+      if (!seen.has(type)) {
+        unique.push(type);
+        seen.add(type);
       }
-      const fallback = availableTypes[0] ?? centerType;
-      return this.randomChoice(availableTypes, fallback);
-    };
-
-    const centerColor = this.pickColorExcluding([]);
-    this.centerSymbolColor = cloneColor(centerColor);
-
-    type MatchSpec = { type: SymbolType; color: RGBColor; role: 'correct' | 'bait' | 'filler' };
-    const specs: MatchSpec[] = [];
-    const usedTypes: SymbolType[] = [centerType];
-    const fillerColors: RGBColor[] = [];
-
-    const createFiller = (extraTypeExclusions: SymbolType[] = [], extraColorExclusions: RGBColor[] = []) => {
-      const type = pickOtherType([...usedTypes, ...extraTypeExclusions]);
-      const color = this.pickColorExcluding([this.centerSymbolColor, ...fillerColors, ...extraColorExclusions]);
-      usedTypes.push(type);
-      fillerColors.push(color);
-      specs.push({ type, color, role: 'filler' });
-    };
-
-    if (mode === 'match-color') {
-      const correctType = pickOtherType();
-      usedTypes.push(correctType);
-      const wrongShapeColor = this.pickColorExcluding([this.centerSymbolColor]);
-      specs.push({ type: correctType, color: this.centerSymbolColor, role: 'correct' });
-      specs.push({ type: centerType, color: wrongShapeColor, role: 'bait' });
-      createFiller([correctType], [wrongShapeColor]);
-      createFiller([correctType], [wrongShapeColor]);
-    } else {
-      const correctColor = this.pickColorExcluding([this.centerSymbolColor]);
-      const colorBaitType = pickOtherType();
-      usedTypes.push(colorBaitType);
-      specs.push({ type: centerType, color: correctColor, role: 'correct' });
-      specs.push({ type: colorBaitType, color: this.centerSymbolColor, role: 'bait' });
-      createFiller([colorBaitType], [correctColor]);
-      createFiller([colorBaitType], [correctColor]);
-    }
-
-    const randomized = this.shuffleArray(specs).slice(0, this.symbols.length);
-    this.symbols.forEach((symbol, index) => {
-      const spec = randomized[index % randomized.length];
-      symbol.type = spec.type;
-      symbol.color = cloneColor(spec.color);
-      symbol.scale = this.ringSymbolScale;
-      symbol.rotation = this.ringRotationOffset;
     });
-    const correctIndex = randomized.findIndex((spec) => spec.role === 'correct');
-    return correctIndex >= 0 ? correctIndex : 0;
+    return unique;
   }
+
+  private pickUniqueSymbolTypes(count: number, exclusions: SymbolType[] = []): SymbolType[] {
+    const excludeSet = new Set(exclusions);
+    const uniqueTypes = this.shuffleArray(this.getUniqueThemeTypes());
+    const result: SymbolType[] = [];
+    const pushIfAvailable = (type: SymbolType | undefined) => {
+      if (!type || excludeSet.has(type) || result.includes(type)) return;
+      result.push(type);
+    };
+    uniqueTypes.forEach((type) => pushIfAvailable(type));
+    if (result.length < count) {
+      SYMBOL_THEME_SETS.classic.forEach((type) => pushIfAvailable(type));
+    }
+    let cursor = 0;
+    while (result.length < count && uniqueTypes.length > 0) {
+      const candidate = uniqueTypes[cursor % uniqueTypes.length];
+      if (candidate) {
+        result.push(candidate);
+      }
+      cursor += 1;
+    }
+    return result.slice(0, count);
+  }
+
+  private pickUniqueColors(count: number, exclusions: RGBColor[] = []): RGBColor[] {
+    const result: RGBColor[] = [];
+    const used = exclusions.slice();
+    for (let i = 0; i < count; i += 1) {
+      const color = this.pickColorExcluding(used);
+      result.push(color);
+      used.push(color);
+    }
+    return result;
+  }
+
+  private createRingAssignments(
+    centerType: SymbolType,
+    centerColor: RGBColor,
+    matchMode: MatchMechanicMode | null,
+    slotCount: number
+  ): RingAssignment[] {
+    switch (matchMode) {
+      case 'match-color':
+        return this.createMatchColorAssignments(centerType, centerColor, slotCount);
+      case 'match-shape':
+        return this.createMatchShapeAssignments(centerType, centerColor, slotCount);
+      default:
+        return this.createStandardAssignments(centerType, centerColor, slotCount);
+    }
+  }
+
+  private createStandardAssignments(centerType: SymbolType, centerColor: RGBColor, slotCount: number): RingAssignment[] {
+    const assignments: RingAssignment[] = [
+      { role: 'correct', type: centerType, color: cloneColor(centerColor) }
+    ];
+    const distractorTypes = this.pickUniqueSymbolTypes(Math.max(0, slotCount - 1), [centerType]);
+    const distractorColors = this.pickUniqueColors(Math.max(0, slotCount - 1), [centerColor]);
+    distractorTypes.forEach((type, idx) => {
+      const color = distractorColors[idx] ?? this.pickColorExcluding([centerColor, ...distractorColors]);
+      assignments.push({ role: 'filler', type, color });
+    });
+    while (assignments.length < slotCount) {
+      const fallbackColor = this.pickColorExcluding([centerColor, ...assignments.map((spec) => spec.color)]);
+      assignments.push({ role: 'filler', type: centerType, color: fallbackColor });
+    }
+    return assignments.slice(0, slotCount);
+  }
+
+  private createMatchColorAssignments(centerType: SymbolType, centerColor: RGBColor, slotCount: number): RingAssignment[] {
+    const assignments: RingAssignment[] = [];
+    const correctType = this.pickUniqueSymbolTypes(1, [centerType])[0] ?? centerType;
+    assignments.push({ role: 'correct', type: correctType, color: cloneColor(centerColor) });
+
+    const nonCenterColors = this.pickUniqueColors(Math.max(0, slotCount - 1), [centerColor]);
+    const shapeBaitColor = nonCenterColors.shift() ?? this.pickColorExcluding([centerColor]);
+    assignments.push({ role: 'bait', type: centerType, color: shapeBaitColor });
+
+    const remainingTypes = this.pickUniqueSymbolTypes(Math.max(0, slotCount - 2), [centerType, correctType]);
+    remainingTypes.forEach((type, idx) => {
+      const color = nonCenterColors[idx] ?? this.pickColorExcluding([centerColor, shapeBaitColor, ...nonCenterColors]);
+      assignments.push({ role: 'filler', type, color });
+    });
+    while (assignments.length < slotCount) {
+      const color = this.pickColorExcluding([centerColor, shapeBaitColor, ...assignments.map((spec) => spec.color)]);
+      const type = this.pickUniqueSymbolTypes(1, [centerType, correctType, ...assignments.map((spec) => spec.type)])[0] ?? centerType;
+      assignments.push({ role: 'filler', type, color });
+    }
+    return assignments.slice(0, slotCount);
+  }
+
+  private createMatchShapeAssignments(centerType: SymbolType, centerColor: RGBColor, slotCount: number): RingAssignment[] {
+    const assignments: RingAssignment[] = [];
+    const correctColor = this.pickColorExcluding([centerColor]);
+    assignments.push({ role: 'correct', type: centerType, color: correctColor });
+
+    const colorBaitType = this.pickUniqueSymbolTypes(1, [centerType])[0] ?? centerType;
+    assignments.push({ role: 'bait', type: colorBaitType, color: cloneColor(centerColor) });
+
+    const remainingTypes = this.pickUniqueSymbolTypes(Math.max(0, slotCount - 2), [centerType, colorBaitType]);
+    const fillerColors = this.pickUniqueColors(Math.max(0, slotCount - 2), [centerColor, correctColor]);
+    remainingTypes.forEach((type, idx) => {
+      const color = fillerColors[idx] ?? this.pickColorExcluding([centerColor, correctColor, ...fillerColors]);
+      assignments.push({ role: 'filler', type, color });
+    });
+    while (assignments.length < slotCount) {
+      const color = this.pickColorExcluding([centerColor, correctColor, ...assignments.map((spec) => spec.color)]);
+      const type = this.pickUniqueSymbolTypes(1, [centerType, colorBaitType, ...assignments.map((spec) => spec.type)])[0] ?? colorBaitType;
+      assignments.push({ role: 'filler', type, color });
+    }
+    return assignments.slice(0, slotCount);
+  }
+
+  private buildRingLayoutPlan(
+    centerType: SymbolType,
+    matchMode: MatchMechanicMode | null,
+    opts?: { baseColor?: RGBColor | null }
+  ): RingLayoutPlan | null {
+    if (this.symbols.length === 0) {
+      return null;
+    }
+    const slotCount = this.symbols.length;
+    const baseColor = opts?.baseColor ? cloneColor(opts.baseColor) : this.pickColorExcluding([]);
+    const assignments = this.createRingAssignments(centerType, baseColor, matchMode, slotCount);
+    const randomized = this.shuffleArray(assignments);
+    const plan: RingLayoutPlan = {
+      centerType,
+      centerColor: cloneColor(baseColor),
+      correctIndex: Math.max(0, randomized.findIndex((spec) => spec.role === 'correct')),
+      matchMode,
+      applied: false,
+      apply: () => {
+        randomized.forEach((spec, idx) => {
+          const symbol = this.symbols[idx];
+          if (!symbol) return;
+          symbol.type = spec.type;
+          this.assignSymbolColor(symbol, spec.color);
+          symbol.scale = this.ringSymbolScale;
+          symbol.rotation = 0;
+        });
+        this.updateRingLayout();
+        plan.applied = true;
+      }
+    };
+    if (plan.correctIndex < 0) {
+      plan.correctIndex = 0;
+    }
+    return plan;
+  }
+
 
   private isMatchColorCorrect(symbol: Symbol): boolean {
     return !!symbol.color && colorsEqual(symbol.color, this.centerSymbolColor) && symbol.type !== this.centerSymbol;
@@ -788,13 +904,17 @@ export class Game implements InputHandler {
     this.updateMechanicBannerText();
   }
 
-  private restartMemoryPreview(opts?: { shuffle?: boolean }) {
+  private restartMemoryPreview() {
     this.memorySymbolsHidden = false;
     this.memoryRevealTimer = this.memoryPreviewDuration;
-    if (opts?.shuffle !== false) {
-      this.applySpinShuffle();
-    }
     this.ensureMemoryMessage();
+  }
+
+  private handlePostAnswerLayoutChange(nextCenter: SymbolType) {
+    this.applySpinShuffle({ centerType: nextCenter });
+    if (this.activeMechanics.includes('memory')) {
+      this.restartMemoryPreview();
+    }
   }
 
   private startProgressiveLevelAnnouncement(block: number, mechanicCount: number) {
@@ -855,10 +975,11 @@ export class Game implements InputHandler {
       case 'remap':
         this.rollRemapMapping();
         break;
-      case 'spin':
-        this.applySpinShuffle();
-        break;
       case 'memory':
+        if (this.resolvingAnswer) {
+          break;
+        }
+        this.applySpinShuffle();
         this.restartMemoryPreview();
         break;
       case 'joystick':
@@ -878,9 +999,6 @@ export class Game implements InputHandler {
     switch (type) {
       case 'remap':
         this.remapMapping = null;
-        break;
-      case 'spin':
-        this.cancelSpinAnimation(0);
         break;
       case 'memory':
         this.memorySymbolsHidden = false;
@@ -909,8 +1027,6 @@ export class Game implements InputHandler {
     switch (type) {
       case 'remap':
         return this.remapMapping ? 'Remap' : 'Remap';
-      case 'spin':
-        return 'Spin Mode';
       case 'memory':
         return 'Remember layout';
       case 'joystick':
@@ -949,11 +1065,10 @@ export class Game implements InputHandler {
       case 'remap':
         this.rollRemapMapping();
         break;
-      case 'spin':
-        this.applySpinShuffle();
-        break;
       case 'memory':
-        this.restartMemoryPreview({ shuffle: !this.activeMechanics.includes('spin') });
+        if (!this.resolvingAnswer) {
+          this.restartMemoryPreview();
+        }
         break;
       default:
         break;
@@ -1073,14 +1188,15 @@ export class Game implements InputHandler {
       this.joystickInverted = false;
       return;
     }
-    if (this.activeMechanics.includes('spin') || this.activeMechanics.includes('memory')) {
-      this.applySpinShuffle();
-    }
-    if (!this.activeMechanics.includes('memory')) {
+    const memoryActive = this.activeMechanics.includes('memory');
+    if (memoryActive) {
+      if (!this.resolvingAnswer) {
+        this.applySpinShuffle();
+        this.restartMemoryPreview();
+      }
+    } else {
       this.memorySymbolsHidden = false;
       this.memoryRevealTimer = 0;
-    } else {
-      this.restartMemoryPreview({ shuffle: false });
     }
     if (!this.activeMechanics.includes('joystick')) {
       this.joystickInverted = false;
@@ -1088,19 +1204,27 @@ export class Game implements InputHandler {
   }
 
   private applyCenterSymbol(next: SymbolType, opts?: { resetVisual?: boolean }) {
+    const previousCenter = this.centerSymbol;
     this.centerSymbol = next;
     const matchMode = this.getMatchMechanicMode();
-    if (matchMode) {
-      this.currentTargetIndex = this.applyMatchMechanicLayout(matchMode);
+    let plan: RingLayoutPlan | null = null;
+    const pendingMatch = this.pendingRingLayout && this.pendingRingLayout.centerType === next;
+    if (pendingMatch) {
+      plan = this.pendingRingLayout;
+      this.pendingRingLayout = null;
     } else {
-      const matchIdx = this.symbols.findIndex((symbol) => symbol.type === next);
-      this.currentTargetIndex = matchIdx >= 0 ? matchIdx : 0;
-      if (matchIdx >= 0) {
-        const matchSymbol = this.symbols[matchIdx];
-        this.centerSymbolColor = matchSymbol?.color ? cloneColor(matchSymbol.color) : this.getRandomSymbolColor();
-      } else {
-        this.centerSymbolColor = this.getRandomSymbolColor();
-      }
+      const baseColor = next === previousCenter ? this.centerSymbolColor : null;
+      plan = this.buildRingLayoutPlan(next, matchMode, { baseColor }) ?? null;
+    }
+    if (plan && !plan.applied && !pendingMatch) {
+      plan.apply();
+    }
+    if (plan) {
+      this.centerSymbolColor = cloneColor(plan.centerColor);
+      this.currentTargetIndex = plan.correctIndex;
+    } else {
+      this.currentTargetIndex = 0;
+      this.centerSymbolColor = this.centerSymbolColor ?? this.getRandomSymbolColor();
     }
     const { x: cx, y: cy } = this.getCanvasCenter();
     this.centerPos.x = cx;
@@ -1306,7 +1430,6 @@ export class Game implements InputHandler {
 
     const nextMechanicEnabled: typeof this.mechanicEnabled = {
       remap: data.mechanicEnableRemap !== false,
-      spin: data.mechanicEnableSpin !== false,
       memory: data.mechanicEnableMemory !== false,
       joystick: data.mechanicEnableJoystick !== false,
       'match-color': data.mechanicEnableMatchColor !== false,
@@ -1600,54 +1723,66 @@ export class Game implements InputHandler {
   }
 
   private handleCorrectSelection(ringSymbol: Symbol) {
-    this.score += 100;
-    const bonus = this.computeTimeBonus();
-    if (bonus !== 0) {
-      this.timer.add(bonus);
-      this.showTimeDelta(bonus);
-    }
-    this.streak += 1;
-    if (this.score > this.highscore) {
-      this.highscore = this.score;
-    }
+    this.resolvingAnswer = true;
+    try {
+      this.score += 100;
+      const bonus = this.computeTimeBonus();
+      if (bonus !== 0) {
+        this.timer.add(bonus);
+        this.showTimeDelta(bonus);
+      }
+      this.streak += 1;
+      if (this.score > this.highscore) {
+        this.highscore = this.score;
+      }
 
-    // Visual and sound feedback
-    this.effects.symbolPulse({ current: ringSymbol.scale });
-    this.audio.play('correct');
-    this.triggerScoreCelebration(ringSymbol);
-    this.triggerScoreParticles(ringSymbol);
+      // Visual and sound feedback
+      this.effects.symbolPulse({ current: ringSymbol.scale });
+      this.audio.play('correct');
+      this.triggerScoreCelebration(ringSymbol);
+      this.triggerScoreParticles(ringSymbol);
 
-    this.correctAnswers += 1;
-    this.updateMechanicsAfterCorrect();
+      this.correctAnswers += 1;
+      this.updateMechanicsAfterCorrect();
 
-    const next = this.getRandomSymbolType(this.centerSymbol);
-    this.anim.clear();
-    this.animateCenterSwap(next, {
-      targetPos: { x: ringSymbol.x, y: ringSymbol.y },
-      exitDuration: 0.24,
-      appearDuration: 0.34,
-      offsetRatio: 0.085
-    });
+      const next = this.getRandomSymbolType(this.centerSymbol);
+      this.anim.clear();
+      this.animateCenterSwap(next, {
+        targetPos: { x: ringSymbol.x, y: ringSymbol.y },
+        exitDuration: 0.24,
+        appearDuration: 0.34,
+        offsetRatio: 0.085
+      });
 
-    if (this.score % 500 === 0) {
-      this.initSymbols();
+      if (this.score % 500 === 0) {
+        this.initSymbols();
+      }
+      this.handlePostAnswerLayoutChange(next);
+    } finally {
+      this.resolvingAnswer = false;
     }
   }
 
   private handleWrongSelection(ringSymbol: Symbol) {
-    this.timer.add(-this.config.timePenalty);
-    this.showTimeDelta(-this.config.timePenalty);
-    this.effects.flash('#ff4433', 0.2);
-    this.audio.play('wrong');
-    this.streak = 0;
-    const next = this.getRandomSymbolType(this.centerSymbol, ringSymbol.type);
-    this.anim.clear();
-    this.animateCenterSwap(next, {
-      exitDuration: 0.22,
-      appearDuration: 0.34,
-      offsetRatio: 0.06,
-      disappearScale: this.centerBaseScale * 0.5
-    });
+    this.resolvingAnswer = true;
+    try {
+      this.timer.add(-this.config.timePenalty);
+      this.showTimeDelta(-this.config.timePenalty);
+      this.effects.flash('#ff4433', 0.2);
+      this.audio.play('wrong');
+      this.streak = 0;
+      const next = this.getRandomSymbolType(this.centerSymbol, ringSymbol.type);
+      this.anim.clear();
+      this.animateCenterSwap(next, {
+        exitDuration: 0.22,
+        appearDuration: 0.34,
+        offsetRatio: 0.06,
+        disappearScale: this.centerBaseScale * 0.5
+      });
+      this.handlePostAnswerLayoutChange(next);
+    } finally {
+      this.resolvingAnswer = false;
+    }
   }
 
   private triggerScoreParticles(ringSymbol: Symbol) {
