@@ -3,10 +3,8 @@ import { GameState, GameStateManager } from '../core/GameStateManager';
 import InputRouter from '../input/InputRouter';
 import type { Action } from '../input/Keymap';
 import ConfigStore, { type Config as PersistentConfig } from '../storage/ConfigStore';
-import { MenuScreen } from '../ui/menu/MenuScreen';
 import { LeaderboardScreen, type LeaderboardScreenData } from '../ui/leaderboard/LeaderboardScreen';
 import { SettingsScreen } from '../ui/settings/SettingsScreen';
-import { clearCanvas } from '../ui/canvasUtils';
 import { sanitizeSymbolColors } from '../config/colorPresets';
 
 export class App {
@@ -15,7 +13,6 @@ export class App {
   private readonly stateManager = new GameStateManager();
   private readonly configStore = new ConfigStore();
   private readonly game: Game;
-  private readonly menuScreen: MenuScreen;
   private readonly leaderboardScreen: LeaderboardScreen;
   private readonly settingsScreen: SettingsScreen;
   private readonly inputRouter: InputRouter;
@@ -45,8 +42,6 @@ export class App {
     this.game = new Game(canvas);
     this.game.refreshSettings(this.settingsValues);
 
-    this.menuScreen = new MenuScreen(canvas, ctx);
-    this.menuScreen.setConfig(this.settingsValues);
     this.leaderboardScreen = new LeaderboardScreen(canvas, ctx);
     this.settingsScreen = new SettingsScreen({
       canvas,
@@ -65,8 +60,8 @@ export class App {
   }
 
   start() {
+    this.game.enterAttractMode();
     this.stateManager.showState(GameState.MENU);
-    this.menuScreen.enter();
   }
 
   private initializeSettings(): PersistentConfig {
@@ -138,19 +133,15 @@ export class App {
     switch (state) {
       case GameState.MENU:
         this.settingsReturnState = null;
-        this.menuScreen.enter();
+        this.game.enterAttractMode();
         break;
       case GameState.SETTINGS:
-        this.menuScreen.exit();
         this.settingsScreen.setValues(this.settingsValues);
         this.settingsScreen.enter();
         break;
       case GameState.GAME:
-        this.menuScreen.exit();
-        clearCanvas(this.canvas, this.ctx);
         break;
       case GameState.LEADERBOARD:
-        this.menuScreen.exit();
         this.leaderboardScreen.setData(this.leaderboardData);
         this.leaderboardScreen.draw();
         break;
@@ -162,7 +153,7 @@ export class App {
   private handleCanvasClick(x: number, y: number) {
     const state = this.stateManager.getCurrentState();
     if (state === GameState.MENU) {
-      const handled = this.menuScreen.handleClick(x, y, {
+      const handled = this.game.handleAttractClick(x, y, {
         onStart: () => this.startGameFromMenu()
       });
       if (handled) {
@@ -213,7 +204,7 @@ export class App {
     }
 
     if (state === GameState.MENU) {
-      const handled = this.menuScreen.handleAction(action, {
+      const handled = this.game.handleAttractAction(action, {
         onStart: () => this.startGameFromMenu()
       });
       if (handled) {
@@ -273,7 +264,6 @@ export class App {
     this.settingsValues = { ...values };
     this.configStore.save(this.settingsValues);
     this.game.refreshSettings(this.settingsValues);
-    this.menuScreen.setConfig(this.settingsValues);
   }
 
   private handleResetHighscore() {

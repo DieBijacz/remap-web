@@ -5,6 +5,7 @@ import { Timer } from '../core/Timer';
 import { drawSymbol, getSymbolPalette, SYMBOL_THEME_SETS } from '../render/Symbols';
 import type { Symbol, SymbolType, SymbolTheme } from '../render/Symbols';
 import type { InputHandler } from '../input/InputManager';
+import type { Action } from '../input/Keymap';
 import { InputManager } from '../input/InputManager';
 import { EffectsManager } from '../fx/EffectsManager';
 import { ParticleSystem } from '../fx/ParticleSystem';
@@ -22,10 +23,12 @@ const CENTER_MIN_RATIO = 0.4;
 const TIME_DELTA_DISPLAY_SEC = 1.1;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const randBetween = (min: number, max: number) => Math.random() * (max - min) + min;
 const TAU = Math.PI * 2;
 const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const easeInOutCubicDerivative = (t: number) => (t < 0.5 ? 12 * t * t : 12 * Math.pow(1 - t, 2));
 const easeInCubic = (t: number) => t * t * t;
+const easeOutCubicTransition = (t: number) => 1 - Math.pow(1 - t, 3);
 const SCORE_PULSE_DURATION = 0.5;
 const SCORE_PULSE_SCALE = 0.12;
 const SCORE_TRACER_DURATION = 0.55;
@@ -33,6 +36,16 @@ const SCORE_TRACER_TRAIL = 0.22;
 const SCORE_TRACER_THICKNESS = 5;
 const SCORE_TRACER_COUNT = 3;
 const PROGRESSIVE_LEVEL_NOTICE_DURATION = 2.8;
+const MENU_MIN_SYMBOLS = 4;
+const MENU_MAX_SYMBOLS = 60;
+const MENU_SYMBOL_BASE_SIZE = 46;
+const INTRO_SYMBOL_BASE_DELAY = 0.08;
+const INTRO_SYMBOL_DELAY_STEP = 0.09;
+const INTRO_SYMBOL_BASE_DURATION = 0.65;
+const INTRO_CENTER_DELAY_EXTRA = 0.2;
+const INTRO_CENTER_DURATION = 0.7;
+const INTRO_HUD_DELAY_OFFSET = 0.18;
+const INTRO_HUD_FADE_DURATION = 0.35;
 type Direction = 'up' | 'right' | 'down' | 'left';
 type MechanicType =
   | 'none'
@@ -126,6 +139,59 @@ interface MechanicLevelUpNotice {
   detail?: string;
   cta?: string;
 }
+
+interface IntroSymbolState {
+  symbol: Symbol;
+  delay: number;
+  duration: number;
+  start: { x: number; y: number; scale: number; opacity: number };
+  end: { x: number; y: number; scale: number; opacity: number };
+  current: { x: number; y: number; scale: number; opacity: number };
+  progress: number;
+}
+
+interface IntroCenterState {
+  delay: number;
+  duration: number;
+  start: { x: number; y: number; scale: number; opacity: number };
+  end: { x: number; y: number; scale: number; opacity: number };
+  current: { x: number; y: number; scale: number; opacity: number };
+  progress: number;
+}
+
+interface IntroTransitionState {
+  timer: number;
+  hudAlpha: number;
+  hudDelay: number;
+  hudFade: number;
+  symbolStates: IntroSymbolState[];
+  symbolLookup: Map<Symbol, IntroSymbolState>;
+  center: IntroCenterState;
+}
+
+type AttractSymbolState = {
+  symbol: Symbol;
+  vx: number;
+  vy: number;
+  rotationSpeed: number;
+  startScale: number;
+  endScale: number;
+  life: number;
+  age: number;
+  exitMargin: number;
+  spawnDelay: number;
+};
+
+type AttractVisualConfig = {
+  symbolTheme: SymbolTheme;
+  count: number;
+  baseSizeVW: number;
+  sizeVariancePct: number;
+  growthMultiplier: number;
+  speedMultiplier: number;
+};
+
+type Rect = { x: number; y: number; width: number; height: number };
 
 const hexToRgb = (hex: string) => {
   const normalized = hex.replace('#', '');
@@ -322,6 +388,21 @@ export class Game implements InputHandler {
   private symbolColorPool: RGBColor[] = DEFAULT_SYMBOL_COLORS.map(cloneColor);
   private centerSymbolColor: RGBColor = cloneColor(DEFAULT_SYMBOL_COLORS[0]);
   private centerOpacity = 1;
+  private introTransition: IntroTransitionState | null = null;
+  private attractSymbols: AttractSymbolState[] = [];
+  private attractPulseTime = 0;
+  private attractStartRect: Rect | null = null;
+  private attractStartRequested = false;
+  private attractPromptAlpha = 1;
+  private attractVisualConfig: AttractVisualConfig = {
+    symbolTheme: 'classic',
+    count: 24,
+    baseSizeVW: 6,
+    sizeVariancePct: 30,
+    growthMultiplier: 4.5,
+    speedMultiplier: 1
+  };
+  private menuColorPool: RGBColor[] = DEFAULT_SYMBOL_COLORS.map(cloneColor);
   private playfieldCenter = { x: 0, y: 0 };
   private lastRingCenter = { x: 0, y: 0 };
   private promptSpawnTime = 0;
@@ -375,7 +456,7 @@ export class Game implements InputHandler {
     'match-shape': 0
   };
   private leaderboard: HighscoreEntry[] = [];
-  private gamePhase: 'idle' | 'playing' | 'name-entry' | 'completed' = 'idle';
+  private gamePhase: 'idle' | 'attract' | 'playing' | 'name-entry' | 'completed' = 'idle';
   private nameEntryMode: NameEntryMode = 'slots';
   private nameEntrySlots: string[] = Array(NAME_SLOT_COUNT).fill(' ');
   private nameEntryCharIndices: number[] = Array(NAME_SLOT_COUNT).fill(0);
@@ -1300,6 +1381,43 @@ export class Game implements InputHandler {
     this.syncHighscore();
   }
 
+  enterAttractMode() {
+    this.gamePhase = 'attract';
+    this.attractStartRequested = false;
+    this.attractStartRect = null;
+    this.attractPulseTime = 0;
+    this.attractSymbols = [];
+    this.introTransition = null;
+    this.time.set(0);
+    this.timer.set(this.config.duration);
+    this.clock.stop();
+    this.clock.start((dt) => this.update(dt));
+  }
+
+  handleAttractAction(action: Action, actions: { onStart: () => void }): boolean {
+    if (this.gamePhase !== 'attract') {
+      return false;
+    }
+    if (action === 'confirm') {
+      this.attractStartRequested = true;
+      actions.onStart();
+      return true;
+    }
+    return false;
+  }
+
+  handleAttractClick(x: number, y: number, actions: { onStart: () => void }): boolean {
+    if (this.gamePhase !== 'attract') {
+      return false;
+    }
+    if (this.attractStartRect && this.pointInRect(x, y, this.attractStartRect)) {
+      this.attractStartRequested = true;
+      actions.onStart();
+      return true;
+    }
+    return false;
+  }
+
   private showTimeDelta(delta: number) {
     this.timeDeltaValue = delta;
     this.timeDeltaTimer = TIME_DELTA_DISPLAY_SEC;
@@ -1330,7 +1448,9 @@ export class Game implements InputHandler {
       merged.minTimeBonus = merged.maxTimeBonus;
     }
     this.config = merged;
-    this.symbolColorPool = sanitizeSymbolColors(data.symbolColors);
+    const sanitizedColors = sanitizeSymbolColors(data.symbolColors);
+    this.symbolColorPool = sanitizedColors;
+    this.menuColorPool = sanitizedColors.map(cloneColor);
 
     this.ringSymbolScale = BASE_RING_SYMBOL_SCALE * merged.symbolScale;
     this.centerBaseScale = BASE_CENTER_SCALE * merged.symbolScale;
@@ -1338,6 +1458,40 @@ export class Game implements InputHandler {
     this.centerScale = this.centerBaseScale;
     this.symbolStrokeScale = merged.symbolStroke;
     this.applySymbolTheme(themeSetting);
+    this.attractVisualConfig = {
+      symbolTheme: themeSetting,
+      count: clamp(
+        typeof data.menuSymbolCount === 'number' ? Math.round(data.menuSymbolCount) : this.attractVisualConfig.count,
+        MENU_MIN_SYMBOLS,
+        MENU_MAX_SYMBOLS
+      ),
+      baseSizeVW: clamp(
+        typeof data.menuSymbolBaseSizeVW === 'number' ? data.menuSymbolBaseSizeVW : this.attractVisualConfig.baseSizeVW,
+        0.5,
+        20
+      ),
+      sizeVariancePct: clamp(
+        typeof data.menuSymbolSizeVariancePct === 'number'
+          ? data.menuSymbolSizeVariancePct
+          : this.attractVisualConfig.sizeVariancePct,
+        0,
+        100
+      ),
+      growthMultiplier: clamp(
+        typeof data.menuSymbolGrowthMultiplier === 'number'
+          ? data.menuSymbolGrowthMultiplier
+          : this.attractVisualConfig.growthMultiplier,
+        1,
+        30
+      ),
+      speedMultiplier: clamp(
+        typeof data.menuSymbolSpeedMultiplier === 'number'
+          ? data.menuSymbolSpeedMultiplier
+          : this.attractVisualConfig.speedMultiplier,
+        0.3,
+        2.5
+      )
+    };
     if (!this.symbols.length) {
       this.centerSymbolColor = this.getRandomSymbolColor();
     }
@@ -1670,6 +1824,9 @@ export class Game implements InputHandler {
   }
 
   private handleInput(inputDir: Direction) {
+    if (this.introTransition) {
+      return;
+    }
     console.log('[debug] handleInput', { inputDir, symbolCount: this.symbols.length, mechanics: this.activeMechanics });
 
     const dirToIndex: Record<Direction, number> = {
@@ -1944,10 +2101,347 @@ export class Game implements InputHandler {
     console.log('[debug] initSymbols created', this.symbols.length, 'symbols, currentTargetIndex=', this.currentTargetIndex, 'types=', this.symbols.map(s => s.type));
   }
 
+  private beginIntroTransition() {
+    const r = this.renderer;
+    const canvasRef = this.renderer.canvas;
+    const width = Math.max(1, r.w || canvasRef.width);
+    const height = Math.max(1, r.h || canvasRef.height);
+    const baseY = height + Math.max(80, height * 0.12);
+    const jitterX = Math.max(12, width * 0.02);
+    const symbolStates: IntroSymbolState[] = [];
+    const order = this.getIntroSymbolOrder();
+
+    order.forEach((symbolIndex, orderIndex) => {
+      const symbol = this.symbols[symbolIndex];
+      if (!symbol) {
+        return;
+      }
+      const delay = INTRO_SYMBOL_BASE_DELAY + orderIndex * INTRO_SYMBOL_DELAY_STEP;
+      const duration = INTRO_SYMBOL_BASE_DURATION + orderIndex * 0.05;
+      const startX = symbol.x + randBetween(-jitterX, jitterX);
+      const startY = baseY + randBetween(orderIndex * 10, orderIndex * 18 + 60);
+      const scaleFactor = randBetween(0.68, 0.92);
+      const startScale = Math.max(this.centerMinScale * 0.4, symbol.scale * scaleFactor);
+      const state: IntroSymbolState = {
+        symbol,
+        delay,
+        duration,
+        start: { x: startX, y: startY, scale: startScale, opacity: 0 },
+        end: { x: symbol.x, y: symbol.y, scale: symbol.scale, opacity: 1 },
+        current: { x: startX, y: startY, scale: startScale, opacity: 0 },
+        progress: 0
+      };
+      symbolStates.push(state);
+    });
+
+    const symbolLookup = new Map<Symbol, IntroSymbolState>();
+    symbolStates.forEach((state) => symbolLookup.set(state.symbol, state));
+
+    const anchor = this.getCanvasCenter();
+    this.centerPos.x = anchor.x;
+    this.centerPos.y = anchor.y;
+    const centerDelay = INTRO_SYMBOL_BASE_DELAY + symbolStates.length * INTRO_SYMBOL_DELAY_STEP + INTRO_CENTER_DELAY_EXTRA;
+    const centerStartY = baseY + Math.max(140, height * 0.24);
+    const centerStartScale = Math.max(this.centerMinScale, this.centerScale * 0.75);
+    const centerState: IntroCenterState = {
+      delay: centerDelay,
+      duration: INTRO_CENTER_DURATION,
+      start: { x: anchor.x, y: centerStartY, scale: centerStartScale, opacity: 0 },
+      end: { x: anchor.x, y: anchor.y, scale: this.centerScale, opacity: 1 },
+      current: { x: anchor.x, y: centerStartY, scale: centerStartScale, opacity: 0 },
+      progress: 0
+    };
+
+    this.introTransition = {
+      timer: 0,
+      hudAlpha: 0,
+      hudDelay: centerDelay + INTRO_CENTER_DURATION + INTRO_HUD_DELAY_OFFSET,
+      hudFade: INTRO_HUD_FADE_DURATION,
+      symbolStates,
+      symbolLookup,
+      center: centerState
+    };
+  }
+
+  private updateIntroTransition(dt: number): boolean {
+    const state = this.introTransition;
+    if (!state) {
+      return false;
+    }
+    state.timer += dt;
+    let anyActive = false;
+    state.symbolStates.forEach((entry) => {
+      entry.end.x = entry.symbol.x;
+      entry.end.y = entry.symbol.y;
+      entry.end.scale = entry.symbol.scale;
+      const elapsed = Math.max(0, state.timer - entry.delay);
+      const progress = entry.duration <= 0 ? 1 : Math.min(1, elapsed / entry.duration);
+      entry.progress = progress;
+      const eased = easeOutCubicTransition(progress);
+      entry.current.x = lerp(entry.start.x, entry.end.x, eased);
+      entry.current.y = lerp(entry.start.y, entry.end.y, eased);
+      entry.current.scale = lerp(entry.start.scale, entry.end.scale, eased);
+      entry.current.opacity = lerp(entry.start.opacity, entry.end.opacity, eased);
+      if (progress < 1) {
+        anyActive = true;
+      }
+    });
+
+    const center = state.center;
+    const targetCenterX = this.centerPos.x || this.renderer.w / 2;
+    const targetCenterY = this.centerPos.y || this.renderer.h / 2;
+    center.end.x = targetCenterX;
+    center.end.y = targetCenterY;
+    center.end.scale = this.centerScale;
+    const centerElapsed = Math.max(0, state.timer - center.delay);
+    const centerProgress = center.duration <= 0 ? 1 : Math.min(1, centerElapsed / center.duration);
+    center.progress = centerProgress;
+    const centerEased = easeOutCubicTransition(centerProgress);
+    center.current.x = lerp(center.start.x, center.end.x, centerEased);
+    center.current.y = lerp(center.start.y, center.end.y, centerEased);
+    center.current.scale = lerp(center.start.scale, center.end.scale, centerEased);
+    center.current.opacity = lerp(center.start.opacity, center.end.opacity, centerEased);
+    if (centerProgress < 1) {
+      anyActive = true;
+    }
+
+    if (state.timer >= state.hudDelay) {
+      const hudProgress = Math.min(
+        1,
+        Math.max(0, (state.timer - state.hudDelay) / Math.max(0.001, state.hudFade))
+      );
+      state.hudAlpha = hudProgress;
+    } else {
+      state.hudAlpha = 0;
+    }
+
+    if (anyActive || state.hudAlpha < 1) {
+      return true;
+    }
+
+    this.introTransition = null;
+    return false;
+  }
+
+  private getIntroSymbolOrder() {
+    return [0, 1, 2, 3];
+  }
+
+  private updateAttractState(dt: number) {
+    const width = this.renderer.w || this.renderer.canvas.width;
+    const height = this.renderer.h || this.renderer.canvas.height;
+    if (!width || !height) {
+      return;
+    }
+    this.attractPulseTime += dt;
+    const spawnAllowed = this.gamePhase === 'attract' && !this.attractStartRequested;
+    this.updateAttractSymbols(dt, width, height);
+    if (spawnAllowed) {
+      this.ensureAttractSymbolQuota(width, height);
+    }
+    if (this.attractStartRequested) {
+      this.attractPromptAlpha = Math.max(0, this.attractPromptAlpha - dt * 2.5);
+    } else {
+      this.attractPromptAlpha = Math.min(1, this.attractPromptAlpha + dt * 1.2);
+    }
+  }
+
+  private updateAttractSymbols(dt: number, width: number, height: number) {
+    const fallbackMargin = Math.max(width, height) * 0.35 + 80;
+    this.attractSymbols = this.attractSymbols
+      .map((entry) => {
+        const nextAge = entry.age + dt;
+        const activeAge = Math.max(0, nextAge - entry.spawnDelay);
+        const isActive = nextAge >= entry.spawnDelay;
+        const progress = Math.min(1, entry.life > 0 ? activeAge / entry.life : 1);
+        const symbol = entry.symbol;
+        if (isActive) {
+          symbol.x += entry.vx * dt;
+          symbol.y += entry.vy * dt;
+          symbol.rotation += entry.rotationSpeed * dt;
+        }
+        symbol.scale = lerp(entry.startScale, entry.endScale, progress);
+        return {
+          ...entry,
+          age: nextAge,
+          symbol
+        };
+      })
+      .filter((entry) => {
+        const margin = entry.exitMargin ?? fallbackMargin;
+        const buffer = entry.symbol.scale * 50;
+        const isActive = entry.age >= entry.spawnDelay;
+        const fullyAbove = isActive && entry.symbol.y + buffer < -margin;
+        const offLeft = entry.symbol.x + buffer < -margin;
+        const offRight = entry.symbol.x - buffer > width + margin;
+        const expired = isActive && (entry.age - entry.spawnDelay) > entry.life + 1.5;
+        return !(expired || fullyAbove || offLeft || offRight);
+      });
+  }
+
+  private ensureAttractSymbolQuota(width: number, height: number) {
+    const desired = clamp(Math.round(this.attractVisualConfig.count), MENU_MIN_SYMBOLS, MENU_MAX_SYMBOLS);
+    while (this.attractSymbols.length < desired) {
+      this.attractSymbols.push(this.createAttractSymbol(width, height));
+    }
+    if (this.attractSymbols.length > desired) {
+      this.attractSymbols.splice(0, this.attractSymbols.length - desired);
+    }
+  }
+
+  private pickMenuSymbolColor(): RGBColor {
+    const pool = this.menuColorPool.length > 0 ? this.menuColorPool : DEFAULT_SYMBOL_COLORS;
+    const idx = Math.floor(Math.random() * pool.length);
+    const color = pool[idx] ?? DEFAULT_SYMBOL_COLORS[0];
+    return cloneColor(color);
+  }
+
+  private createAttractSymbol(width: number, height: number): AttractSymbolState {
+    const themeSet = SYMBOL_THEME_SETS[this.attractVisualConfig.symbolTheme] ?? SYMBOL_THEME_SETS.classic;
+    const symbolType = themeSet[Math.floor(Math.random() * themeSet.length)] as SymbolType;
+    const overshoot = Math.max(width, height) * 0.08 + 32;
+    const exitMargin = Math.max(width, height) * 0.4 + 120;
+    const startX = randBetween(width * 0.05, width * 0.95);
+    const startY = height + randBetween(overshoot, overshoot * 2.2);
+    const speedMultiplier = this.attractVisualConfig.speedMultiplier;
+    const verticalSpeed = randBetween(height * 0.18, height * 0.28) * speedMultiplier;
+    const horizontalDrift = randBetween(-width * 0.12, width * 0.12) * speedMultiplier;
+
+    const baseSizeVW = this.attractVisualConfig.baseSizeVW;
+    const baseSizePx = Math.max(4, width * (baseSizeVW / 100));
+    const variance = this.attractVisualConfig.sizeVariancePct / 100;
+    const jitter = variance > 0 ? randBetween(-variance, variance) : 0;
+    const startSizePx = Math.max(6, baseSizePx * (1 + jitter));
+    const startScale = Math.max(0.05, startSizePx / MENU_SYMBOL_BASE_SIZE);
+
+    const minGrowth = 1.05;
+    const growthMax = Math.max(minGrowth, this.attractVisualConfig.growthMultiplier);
+    const growthMultiplier = growthMax === minGrowth ? minGrowth : randBetween(minGrowth, growthMax);
+    const endScale = Math.max(startScale * growthMultiplier, startScale + 0.05);
+
+    const travelDistance = startY + exitMargin + endScale * 50;
+    const life = Math.max(2.5, travelDistance / verticalSpeed);
+    const rotationSpeed = randBetween(-2.2, 2.2) * speedMultiplier;
+    const spawnDelayRange = Math.min(8, 0.3 * this.attractVisualConfig.count);
+    const spawnDelay = randBetween(0, spawnDelayRange / Math.max(0.3, speedMultiplier));
+
+    const symbol: Symbol = {
+      type: symbolType,
+      x: startX,
+      y: startY,
+      scale: startScale,
+      rotation: randBetween(0, Math.PI * 2),
+      color: this.pickMenuSymbolColor()
+    };
+
+    return {
+      symbol,
+      vx: horizontalDrift,
+      vy: -verticalSpeed,
+      rotationSpeed,
+      startScale,
+      endScale,
+      life,
+      age: 0,
+      exitMargin,
+      spawnDelay
+    };
+  }
+
+  private drawAttractBackground(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    ctx.save();
+    const gradient = ctx.createLinearGradient(0, 0, 0, height);
+    gradient.addColorStop(0, '#050c1a');
+    gradient.addColorStop(1, '#02050b');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const radius = Math.max(width, height) * 0.85;
+    const vignette = ctx.createRadialGradient(centerX, centerY, radius * 0.2, centerX, centerY, radius);
+    vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    vignette.addColorStop(1, 'rgba(0, 0, 0, 0.55)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+
+  private drawAmbientSymbols(ctx: CanvasRenderingContext2D) {
+    if (this.attractSymbols.length === 0) {
+      return;
+    }
+    ctx.save();
+    this.attractSymbols.forEach((entry) => {
+      if (entry.age < entry.spawnDelay) return;
+      drawSymbol(ctx, entry.symbol, false, 0.7);
+    });
+    ctx.restore();
+  }
+
+  private drawAttractPrompt(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    if (this.attractPromptAlpha <= 0) {
+      this.attractStartRect = null;
+      return;
+    }
+    const titleText = 'REMAP';
+    const titleSize = Math.max(48, Math.round(height * 0.14));
+    const titleX = width / 2;
+    const titleY = Math.round(height * 0.28);
+
+    ctx.save();
+    ctx.globalAlpha = this.attractPromptAlpha;
+    ctx.font = `${titleSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#f8fafc';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowBlur = Math.max(12, titleSize * 0.15);
+    ctx.shadowColor = 'rgba(3, 6, 12, 0.75)';
+    ctx.fillText(titleText, titleX, titleY);
+    ctx.restore();
+
+    const labelText = 'start game';
+    const labelSize = Math.max(18, Math.round(titleSize * 0.28));
+    const labelY = titleY + titleSize * 0.65;
+    const pulse = (Math.sin(this.attractPulseTime * 2.2) + 1) / 2;
+    const labelAlpha = 0.5 + pulse * 0.5;
+
+    ctx.save();
+    ctx.globalAlpha = this.attractPromptAlpha;
+    ctx.font = `${labelSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = `rgba(126, 231, 135, ${labelAlpha})`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+    ctx.shadowBlur = labelSize * 0.9;
+    ctx.fillText(labelText, titleX, labelY);
+    const metrics = ctx.measureText(labelText);
+    const paddingX = Math.max(24, labelSize);
+    const paddingY = Math.max(12, labelSize * 0.6);
+    const rectX = titleX - metrics.width / 2 - paddingX / 2;
+    const rectY = labelY - paddingY * 0.3;
+    const rectWidth = metrics.width + paddingX;
+    const rectHeight = labelSize + paddingY;
+    this.attractStartRect = {
+      x: rectX,
+      y: rectY,
+      width: rectWidth,
+      height: rectHeight
+    };
+    ctx.strokeStyle = `rgba(126, 231, 135, ${0.25 + pulse * 0.5})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(rectX, rectY + rectHeight);
+    ctx.lineTo(rectX + rectWidth, rectY + rectHeight);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   start() {
     if (this.configStore) {
       this.refreshSettings();
     }
+    this.introTransition = null;
     this.input.addHandler(this);
     this.clock.stop();
     this.gamePhase = 'playing';
@@ -1986,6 +2480,7 @@ export class Game implements InputHandler {
     this.syncHighscore();
     this.timer.set(this.config.duration);
     this.initSymbols();
+    this.beginIntroTransition();
     this.scorePulseTimer = 0;
     this.scorePulseColor = '#79c0ff';
     this.scoreTracers = [];
@@ -1997,6 +2492,21 @@ export class Game implements InputHandler {
   }
 
   private update(dt: number) {
+    this.updateAttractState(dt);
+
+    if (this.gamePhase === 'attract') {
+      this.drawAttractScene();
+      return;
+    }
+
+    if (this.introTransition) {
+      const introActive = this.updateIntroTransition(dt);
+      if (introActive) {
+        this.draw();
+        return;
+      }
+    }
+
     if (this.mechanicLevelUpNotice) {
       if (this.mechanicLevelUpTimer > 0) {
         this.mechanicLevelUpTimer = Math.max(0, this.mechanicLevelUpTimer - dt);
@@ -2239,8 +2749,24 @@ export class Game implements InputHandler {
     }
   }
 
+  private drawAttractScene() {
+    const r = this.renderer;
+    const ctx = r.ctx;
+    const width = r.w || this.renderer.canvas.width;
+    const height = r.h || this.renderer.canvas.height;
+    this.drawAttractBackground(ctx, width, height);
+    this.drawAmbientSymbols(ctx);
+    this.drawAttractPrompt(ctx, width, height);
+  }
+
   private draw() {
     const r = this.renderer;
+    const ctx = r.ctx;
+    const intro = this.introTransition;
+    if (this.gamePhase === 'attract') {
+      this.drawAttractScene();
+      return;
+    }
     r.clear('#0d1117');
     const anchor = this.getCanvasCenter();
     if (anchor.x !== this.lastRingCenter.x || anchor.y !== this.lastRingCenter.y) {
@@ -2250,8 +2776,9 @@ export class Game implements InputHandler {
       this.centerPos.x = anchor.x;
       this.centerPos.y = anchor.y;
     }
-    this.drawRingBackdrop(r.ctx);
-    this.drawMechanicRings(r.ctx);
+    this.drawRingBackdrop(ctx);
+    this.drawAmbientSymbols(ctx);
+    this.drawMechanicRings(ctx);
 
     const hideRing = this.activeMechanics.includes('memory') && this.memorySymbolsHidden;
     const spinState = this.spinState && this.spinState.active ? this.spinState : null;
@@ -2261,59 +2788,87 @@ export class Game implements InputHandler {
 
     // Draw symbols
     if (applyBlur) {
-      r.ctx.save();
-      r.ctx.filter = `blur(${blurAmount.toFixed(2)}px)`;
+      ctx.save();
+      ctx.filter = `blur(${blurAmount.toFixed(2)}px)`;
     }
+      const introSymbolLookup = intro?.symbolLookup ?? null;
       this.symbols.forEach((symbol) => {
         if (hideRing) {
           return;
         }
+        const introEntry = introSymbolLookup?.get(symbol) ?? null;
+        if (introEntry) {
+          if (introEntry.current.opacity <= 0) {
+            return;
+          }
+          ctx.save();
+          ctx.globalAlpha *= introEntry.current.opacity;
+          const animatedSymbol: Symbol = {
+            ...symbol,
+            x: introEntry.current.x,
+            y: introEntry.current.y,
+            scale: introEntry.current.scale
+          };
+          drawSymbol(ctx, animatedSymbol, false, this.symbolStrokeScale);
+          ctx.restore();
+          return;
+        }
         // ring answers are not the current prompt; draw with normal glow
-        drawSymbol(r.ctx, symbol, false, this.symbolStrokeScale);
+        drawSymbol(ctx, symbol, false, this.symbolStrokeScale);
       });
     if (applyBlur) {
-      r.ctx.restore();
+      ctx.restore();
     }
 
     if (this.particlesEnabled) {
-      this.particles.draw(r.ctx);
+      this.particles.draw(ctx);
     }
 
     // Draw center prompt symbol larger in the middle (may be animating)
-    const centerX = this.centerPos.x || r.w / 2;
-    const centerY = this.centerPos.y || r.h / 2;
+    let centerX = this.centerPos.x || r.w / 2;
+    let centerY = this.centerPos.y || r.h / 2;
+    let centerScale = this.centerScale;
+    let centerOpacity = this.centerOpacity;
+    if (intro) {
+      centerX = intro.center.current.x;
+      centerY = intro.center.current.y;
+      centerScale = intro.center.current.scale;
+      centerOpacity *= intro.center.current.opacity;
+    }
     const centerSym: Symbol = {
       type: this.centerSymbol,
       x: centerX,
       y: centerY,
-      scale: this.centerScale,
+      scale: centerScale,
       rotation: 0,
       color: this.centerSymbolColor
     };
-    r.ctx.save();
-    r.ctx.globalAlpha = this.centerOpacity;
-    drawSymbol(r.ctx, centerSym, true, this.symbolStrokeScale);
-    r.ctx.restore();
+    ctx.save();
+    ctx.globalAlpha = centerOpacity;
+    drawSymbol(ctx, centerSym, true, this.symbolStrokeScale);
+    ctx.restore();
 
-    const hudMetrics = this.drawScoreboard(r.ctx);
-    if (!this.mechanicLevelUpNotice && this.gamePhase === 'playing') {
-      this.drawMechanicBanner(r.ctx, hudMetrics);
+    const hudOpacity = intro ? intro.hudAlpha : 1;
+    const hudMetrics = this.drawScoreboard(ctx, hudOpacity);
+    const hudVisible = hudOpacity > 0.001;
+    if (!this.mechanicLevelUpNotice && this.gamePhase === 'playing' && hudVisible) {
+      this.drawMechanicBanner(ctx, hudMetrics);
     }
-    this.drawTimeBar(r.ctx);
+    if (hudVisible) {
+      this.drawTimeBar(ctx, hudOpacity);
+    }
     if (this.gamePhase === 'name-entry') {
-      this.drawNameEntryPanel(r.ctx);
+      this.drawNameEntryPanel(ctx);
     }
     if (this.mechanicLevelUpNotice) {
-      this.drawMechanicLevelAnnouncement(r.ctx);
+      this.drawMechanicLevelAnnouncement(ctx);
     }
 
     this.lastRingCenter = anchor;
   }
 
-  private drawScoreboard(ctx: CanvasRenderingContext2D): HudMetrics {
+  private drawScoreboard(ctx: CanvasRenderingContext2D, opacity = 1): HudMetrics {
     const r = this.renderer;
-    ctx.save();
-
     const hudPad = Math.round(Math.max(8, r.h * 0.02));
     const scoreFontSize = Math.max(24, Math.round(r.h * 0.07));
     const stripTop = Math.max(0, Math.round(hudPad * 0.12));
@@ -2333,6 +2888,24 @@ export class Game implements InputHandler {
 
     const scoreStripBottom = topY + scoreBlockHeight + stripPadding;
     const stripHeight = scoreStripBottom - stripTop;
+    const metrics: HudMetrics = {
+      hudPad,
+      topY,
+      scoreFontSize,
+      labelFontSize,
+      valueFontSize,
+      labelOffset,
+      scoreBlockHeight,
+      scoreStripBottom
+    };
+
+    const clampedOpacity = Math.max(0, Math.min(1, opacity));
+    if (clampedOpacity <= 0) {
+      return metrics;
+    }
+
+    ctx.save();
+    ctx.globalAlpha *= clampedOpacity;
     ctx.fillStyle = 'rgba(8, 12, 20, 0.82)';
     ctx.fillRect(0, stripTop, r.w, stripHeight);
     const separatorHeight = Math.max(1, Math.round(r.h * 0.002));
@@ -2375,16 +2948,7 @@ export class Game implements InputHandler {
 
     ctx.restore();
 
-    return {
-      hudPad,
-      topY,
-      scoreFontSize,
-      labelFontSize,
-      valueFontSize,
-      labelOffset,
-      scoreBlockHeight,
-      scoreStripBottom
-    };
+    return metrics;
   }
 
   private drawMechanicBanner(ctx: CanvasRenderingContext2D, metrics: HudMetrics) {
@@ -2914,13 +3478,20 @@ export class Game implements InputHandler {
     });
   }
 
-  private drawTimeBar(ctx: CanvasRenderingContext2D) {
+  private drawTimeBar(ctx: CanvasRenderingContext2D, opacity = 1) {
     const r = this.renderer;
     const pad = Math.round(Math.max(12, r.h * 0.03));
     const barH = Math.max(6, Math.round(r.h * 0.012));
     const barW = r.w - pad * 2;
     const timeRatio = Math.max(0, Math.min(1, this.timer.get() / this.config.duration));
 
+    const clampedOpacity = Math.max(0, Math.min(1, opacity));
+    if (clampedOpacity <= 0) {
+      return;
+    }
+
+    ctx.save();
+    ctx.globalAlpha *= clampedOpacity;
     ctx.fillStyle = '#1f2632';
     const barY = r.h - pad - barH;
     ctx.fillRect(pad, barY, barW, barH);
@@ -2962,6 +3533,7 @@ export class Game implements InputHandler {
       ctx.restore();
     }
     ctx.restore();
+    ctx.restore();
   }
 
   // Public API methods
@@ -2969,5 +3541,9 @@ export class Game implements InputHandler {
   setTime(seconds: number) { this.timer.set(seconds); }
   pauseLayer() { this.time.pauseLayer(); }
   resumeLayer() { this.time.resumeLayer(); }
-}
 
+  private pointInRect(x: number, y: number, rect: Rect | null) {
+    if (!rect) return false;
+    return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+  }
+}
