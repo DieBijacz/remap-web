@@ -16,7 +16,6 @@ export class App {
   private readonly leaderboardScreen: LeaderboardScreen;
   private readonly settingsScreen: SettingsScreen;
   private readonly inputRouter: InputRouter;
-  private settingsPausedGame = false;
 
   private settingsValues: PersistentConfig;
   private leaderboardData: LeaderboardScreenData = {
@@ -225,28 +224,24 @@ export class App {
     if (this.stateManager.getCurrentState() === GameState.SETTINGS) {
       return;
     }
-    this.settingsReturnState = fromState;
     if (fromState === GameState.GAME) {
-      this.game.pauseLayer();
-      this.settingsPausedGame = true;
+      // Forfeit the active run before opening options so progress isn't saved.
+      this.game.enterAttractMode();
+      this.settingsReturnState = GameState.MENU;
     } else {
-      this.settingsPausedGame = false;
+      this.settingsReturnState = fromState;
     }
+    this.game.halt();
     this.stateManager.showState(GameState.SETTINGS);
   }
 
   private exitSettings() {
     if (this.stateManager.getCurrentState() !== GameState.SETTINGS) {
       this.settingsReturnState = null;
-      this.settingsPausedGame = false;
       return;
     }
     const nextState = this.settingsReturnState ?? GameState.MENU;
     this.settingsReturnState = null;
-    if (this.settingsPausedGame) {
-      this.game.resumeLayer();
-      this.settingsPausedGame = false;
-    }
     this.stateManager.showState(nextState);
   }
 

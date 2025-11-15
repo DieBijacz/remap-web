@@ -140,23 +140,35 @@ interface MechanicLevelUpNotice {
   cta?: string;
 }
 
+interface IntroKeyframe {
+  x: number;
+  y: number;
+  scale: number;
+  opacity: number;
+  rotation: number;
+}
+
 interface IntroSymbolState {
   symbol: Symbol;
   delay: number;
   duration: number;
-  start: { x: number; y: number; scale: number; opacity: number };
-  end: { x: number; y: number; scale: number; opacity: number };
-  current: { x: number; y: number; scale: number; opacity: number };
+  start: IntroKeyframe;
+  end: IntroKeyframe;
+  current: IntroKeyframe;
   progress: number;
+  rotationTarget: number;
+  curveStrength: number;
 }
 
 interface IntroCenterState {
   delay: number;
   duration: number;
-  start: { x: number; y: number; scale: number; opacity: number };
-  end: { x: number; y: number; scale: number; opacity: number };
-  current: { x: number; y: number; scale: number; opacity: number };
+  start: IntroKeyframe;
+  end: IntroKeyframe;
+  current: IntroKeyframe;
   progress: number;
+  rotationTarget: number;
+  curveStrength: number;
 }
 
 interface IntroTransitionState {
@@ -2101,61 +2113,133 @@ export class Game implements InputHandler {
     console.log('[debug] initSymbols created', this.symbols.length, 'symbols, currentTargetIndex=', this.currentTargetIndex, 'types=', this.symbols.map(s => s.type));
   }
 
+  private computeIntroRotationTarget(startRotation: number) {
+    const normalized = ((startRotation % TAU) + TAU) % TAU;
+    const direction = Math.random() < 0.5 ? -1 : 1;
+    const extraTurns = Math.floor(randBetween(1, 3)); // 1-2 additional full rotations
+    const closingRotation = direction > 0 ? (TAU - normalized) : -normalized;
+    return startRotation + closingRotation + direction * extraTurns * TAU;
+  }
+
+  private createIntroSymbolState(symbol: Symbol, orderIndex: number, width: number, height: number): IntroSymbolState {
+    const overshootBase = Math.max(width, height) * 0.22 + 60;
+    const startX = randBetween(width * 0.08, width * 0.92);
+    const startY = height + randBetween(overshootBase * 0.45, overshootBase * 1.2);
+    const variance = this.attractVisualConfig.sizeVariancePct / 100;
+    const scaleFactor = randBetween(0.55, 0.85 + variance * 0.3);
+    const startScale = Math.max(this.centerMinScale * 0.35, symbol.scale * scaleFactor);
+    const curveRange = Math.max(width * 0.12, 40);
+    const curveStrength = randBetween(-curveRange, curveRange);
+    const bendTargetX = symbol.x + curveStrength * 0.25;
+    const pathDistance = Math.hypot(bendTargetX - startX, symbol.y - startY);
+    const speedMultiplier = Math.max(0.35, this.attractVisualConfig.speedMultiplier);
+    const travelSpeed = randBetween(height * 0.2, height * 0.32) * speedMultiplier;
+    const durationBase = clamp(
+      pathDistance / Math.max(80, travelSpeed),
+      INTRO_SYMBOL_BASE_DURATION * 0.9,
+      INTRO_SYMBOL_BASE_DURATION * 1.9
+    );
+    const duration = durationBase + orderIndex * 0.05;
+    const startRotation = randBetween(0, TAU);
+    const rotationTarget = this.computeIntroRotationTarget(startRotation);
+    const startKeyframe: IntroKeyframe = {
+      x: startX,
+      y: startY,
+      scale: startScale,
+      opacity: 0,
+      rotation: startRotation
+    };
+    const endKeyframe: IntroKeyframe = {
+      x: symbol.x,
+      y: symbol.y,
+      scale: symbol.scale,
+      opacity: 1,
+      rotation: rotationTarget
+    };
+
+    return {
+      symbol,
+      delay: INTRO_SYMBOL_BASE_DELAY + orderIndex * INTRO_SYMBOL_DELAY_STEP,
+      duration,
+      start: startKeyframe,
+      end: endKeyframe,
+      current: { ...startKeyframe },
+      progress: 0,
+      rotationTarget,
+      curveStrength
+    };
+  }
+
+  private createIntroCenterState(sequenceIndex: number, width: number, height: number, anchor: { x: number; y: number }): IntroCenterState {
+    const overshootBase = Math.max(width, height) * 0.25 + 100;
+    const startX = randBetween(width * 0.15, width * 0.85);
+    const startY = height + randBetween(overshootBase * 0.5, overshootBase * 1.1);
+    const scaleFactor = randBetween(0.6, 0.85);
+    const startScale = Math.max(this.centerMinScale * 0.5, this.centerScale * scaleFactor);
+    const curveRange = Math.max(width * 0.08, height * 0.04);
+    const curveStrength = randBetween(-curveRange, curveRange);
+    const bendTargetX = anchor.x + curveStrength * 0.25;
+    const pathDistance = Math.hypot(bendTargetX - startX, anchor.y - startY);
+    const speedMultiplier = Math.max(0.35, this.attractVisualConfig.speedMultiplier);
+    const travelSpeed = randBetween(height * 0.23, height * 0.34) * speedMultiplier;
+    const duration = clamp(
+      pathDistance / Math.max(80, travelSpeed),
+      INTRO_CENTER_DURATION * 0.85,
+      INTRO_CENTER_DURATION * 1.4
+    );
+    const startRotation = randBetween(0, TAU);
+    const rotationTarget = this.computeIntroRotationTarget(startRotation);
+    const delay = INTRO_SYMBOL_BASE_DELAY + sequenceIndex * INTRO_SYMBOL_DELAY_STEP + INTRO_CENTER_DELAY_EXTRA;
+    const startKeyframe: IntroKeyframe = {
+      x: startX,
+      y: startY,
+      scale: startScale,
+      opacity: 0,
+      rotation: startRotation
+    };
+    const endKeyframe: IntroKeyframe = {
+      x: anchor.x,
+      y: anchor.y,
+      scale: this.centerScale,
+      opacity: 1,
+      rotation: rotationTarget
+    };
+
+    return {
+      delay,
+      duration,
+      start: startKeyframe,
+      end: endKeyframe,
+      current: { ...startKeyframe },
+      progress: 0,
+      rotationTarget,
+      curveStrength
+    };
+  }
+
   private beginIntroTransition() {
     const r = this.renderer;
     const canvasRef = this.renderer.canvas;
     const width = Math.max(1, r.w || canvasRef.width);
     const height = Math.max(1, r.h || canvasRef.height);
-    const baseY = height + Math.max(80, height * 0.12);
-    const jitterX = Math.max(12, width * 0.02);
-    const symbolStates: IntroSymbolState[] = [];
     const order = this.getIntroSymbolOrder();
-
-    order.forEach((symbolIndex, orderIndex) => {
-      const symbol = this.symbols[symbolIndex];
-      if (!symbol) {
-        return;
-      }
-      const delay = INTRO_SYMBOL_BASE_DELAY + orderIndex * INTRO_SYMBOL_DELAY_STEP;
-      const duration = INTRO_SYMBOL_BASE_DURATION + orderIndex * 0.05;
-      const startX = symbol.x + randBetween(-jitterX, jitterX);
-      const startY = baseY + randBetween(orderIndex * 10, orderIndex * 18 + 60);
-      const scaleFactor = randBetween(0.68, 0.92);
-      const startScale = Math.max(this.centerMinScale * 0.4, symbol.scale * scaleFactor);
-      const state: IntroSymbolState = {
-        symbol,
-        delay,
-        duration,
-        start: { x: startX, y: startY, scale: startScale, opacity: 0 },
-        end: { x: symbol.x, y: symbol.y, scale: symbol.scale, opacity: 1 },
-        current: { x: startX, y: startY, scale: startScale, opacity: 0 },
-        progress: 0
-      };
-      symbolStates.push(state);
-    });
-
+    const symbolStates = order
+      .map((symbolIndex, orderIndex) => {
+        const symbol = this.symbols[symbolIndex];
+        return symbol ? this.createIntroSymbolState(symbol, orderIndex, width, height) : null;
+      })
+      .filter((state): state is IntroSymbolState => Boolean(state));
     const symbolLookup = new Map<Symbol, IntroSymbolState>();
     symbolStates.forEach((state) => symbolLookup.set(state.symbol, state));
-
     const anchor = this.getCanvasCenter();
     this.centerPos.x = anchor.x;
     this.centerPos.y = anchor.y;
-    const centerDelay = INTRO_SYMBOL_BASE_DELAY + symbolStates.length * INTRO_SYMBOL_DELAY_STEP + INTRO_CENTER_DELAY_EXTRA;
-    const centerStartY = baseY + Math.max(140, height * 0.24);
-    const centerStartScale = Math.max(this.centerMinScale, this.centerScale * 0.75);
-    const centerState: IntroCenterState = {
-      delay: centerDelay,
-      duration: INTRO_CENTER_DURATION,
-      start: { x: anchor.x, y: centerStartY, scale: centerStartScale, opacity: 0 },
-      end: { x: anchor.x, y: anchor.y, scale: this.centerScale, opacity: 1 },
-      current: { x: anchor.x, y: centerStartY, scale: centerStartScale, opacity: 0 },
-      progress: 0
-    };
+    const centerState = this.createIntroCenterState(symbolStates.length, width, height, anchor);
 
     this.introTransition = {
       timer: 0,
       hudAlpha: 0,
-      hudDelay: centerDelay + INTRO_CENTER_DURATION + INTRO_HUD_DELAY_OFFSET,
+      hudDelay: centerState.delay + centerState.duration + INTRO_HUD_DELAY_OFFSET,
       hudFade: INTRO_HUD_FADE_DURATION,
       symbolStates,
       symbolLookup,
@@ -2174,14 +2258,17 @@ export class Game implements InputHandler {
       entry.end.x = entry.symbol.x;
       entry.end.y = entry.symbol.y;
       entry.end.scale = entry.symbol.scale;
+      entry.end.rotation = entry.rotationTarget;
       const elapsed = Math.max(0, state.timer - entry.delay);
       const progress = entry.duration <= 0 ? 1 : Math.min(1, elapsed / entry.duration);
       entry.progress = progress;
       const eased = easeOutCubicTransition(progress);
-      entry.current.x = lerp(entry.start.x, entry.end.x, eased);
+      const horizontalCurve = entry.curveStrength !== 0 ? Math.sin(Math.PI * Math.min(1, eased)) * entry.curveStrength : 0;
+      entry.current.x = lerp(entry.start.x, entry.end.x, eased) + horizontalCurve;
       entry.current.y = lerp(entry.start.y, entry.end.y, eased);
       entry.current.scale = lerp(entry.start.scale, entry.end.scale, eased);
       entry.current.opacity = lerp(entry.start.opacity, entry.end.opacity, eased);
+      entry.current.rotation = lerp(entry.start.rotation, entry.end.rotation, eased);
       if (progress < 1) {
         anyActive = true;
       }
@@ -2193,14 +2280,17 @@ export class Game implements InputHandler {
     center.end.x = targetCenterX;
     center.end.y = targetCenterY;
     center.end.scale = this.centerScale;
+    center.end.rotation = center.rotationTarget;
     const centerElapsed = Math.max(0, state.timer - center.delay);
     const centerProgress = center.duration <= 0 ? 1 : Math.min(1, centerElapsed / center.duration);
     center.progress = centerProgress;
     const centerEased = easeOutCubicTransition(centerProgress);
-    center.current.x = lerp(center.start.x, center.end.x, centerEased);
+    const centerCurve = center.curveStrength !== 0 ? Math.sin(Math.PI * Math.min(1, centerEased)) * center.curveStrength : 0;
+    center.current.x = lerp(center.start.x, center.end.x, centerEased) + centerCurve;
     center.current.y = lerp(center.start.y, center.end.y, centerEased);
     center.current.scale = lerp(center.start.scale, center.end.scale, centerEased);
     center.current.opacity = lerp(center.start.opacity, center.end.opacity, centerEased);
+    center.current.rotation = lerp(center.start.rotation, center.end.rotation, centerEased);
     if (centerProgress < 1) {
       anyActive = true;
     }
@@ -2791,31 +2881,32 @@ export class Game implements InputHandler {
       ctx.save();
       ctx.filter = `blur(${blurAmount.toFixed(2)}px)`;
     }
-      const introSymbolLookup = intro?.symbolLookup ?? null;
-      this.symbols.forEach((symbol) => {
-        if (hideRing) {
+    const introSymbolLookup = intro?.symbolLookup ?? null;
+    this.symbols.forEach((symbol) => {
+      if (hideRing) {
+        return;
+      }
+      const introEntry = introSymbolLookup?.get(symbol) ?? null;
+      if (introEntry) {
+        if (introEntry.current.opacity <= 0) {
           return;
         }
-        const introEntry = introSymbolLookup?.get(symbol) ?? null;
-        if (introEntry) {
-          if (introEntry.current.opacity <= 0) {
-            return;
-          }
-          ctx.save();
-          ctx.globalAlpha *= introEntry.current.opacity;
-          const animatedSymbol: Symbol = {
-            ...symbol,
-            x: introEntry.current.x,
-            y: introEntry.current.y,
-            scale: introEntry.current.scale
-          };
-          drawSymbol(ctx, animatedSymbol, false, this.symbolStrokeScale);
-          ctx.restore();
-          return;
-        }
-        // ring answers are not the current prompt; draw with normal glow
-        drawSymbol(ctx, symbol, false, this.symbolStrokeScale);
-      });
+        ctx.save();
+        ctx.globalAlpha *= introEntry.current.opacity;
+        const animatedSymbol: Symbol = {
+          ...symbol,
+          x: introEntry.current.x,
+          y: introEntry.current.y,
+          scale: introEntry.current.scale,
+          rotation: introEntry.current.rotation ?? symbol.rotation
+        };
+        drawSymbol(ctx, animatedSymbol, false, this.symbolStrokeScale);
+        ctx.restore();
+        return;
+      }
+      // ring answers are not the current prompt; draw with normal glow
+      drawSymbol(ctx, symbol, false, this.symbolStrokeScale);
+    });
     if (applyBlur) {
       ctx.restore();
     }
@@ -2829,18 +2920,20 @@ export class Game implements InputHandler {
     let centerY = this.centerPos.y || r.h / 2;
     let centerScale = this.centerScale;
     let centerOpacity = this.centerOpacity;
+    let centerRotation = 0;
     if (intro) {
       centerX = intro.center.current.x;
       centerY = intro.center.current.y;
       centerScale = intro.center.current.scale;
       centerOpacity *= intro.center.current.opacity;
+      centerRotation = intro.center.current.rotation ?? 0;
     }
     const centerSym: Symbol = {
       type: this.centerSymbol,
       x: centerX,
       y: centerY,
       scale: centerScale,
-      rotation: 0,
+      rotation: centerRotation,
       color: this.centerSymbolColor
     };
     ctx.save();
@@ -3541,6 +3634,7 @@ export class Game implements InputHandler {
   setTime(seconds: number) { this.timer.set(seconds); }
   pauseLayer() { this.time.pauseLayer(); }
   resumeLayer() { this.time.resumeLayer(); }
+  halt() { this.clock.stop(); }
 
   private pointInRect(x: number, y: number, rect: Rect | null) {
     if (!rect) return false;
