@@ -8,15 +8,12 @@ export const clampColorValue = (value: number) => {
 };
 
 export const DEFAULT_SYMBOL_COLORS: RGBColor[] = [
-  { r: 240, g: 72, b: 72 }, // red
-  { r: 255, g: 113, b: 242 }, // magenta
-  { r: 82, g: 219, b: 255 }, // cyan
-  { r: 70, g: 96, b: 255 }, // dark blue
-  { r: 255, g: 196, b: 78 }, // gold
-  { r: 62, g: 214, b: 120 }, // green
-  { r: 156, g: 255, b: 212 }, // mint
-  { r: 255, g: 153, b: 92 }, // amber
-  { r: 184, g: 134, b: 255 } // violet
+  { r: 34, g: 197, b: 94 }, // vibrant green
+  { r: 255, g: 196, b: 64 }, // metallic gold
+  { r: 239, g: 68, b: 68 }, // clear red
+  { r: 59, g: 130, b: 246 }, // bright blue
+  { r: 236, g: 72, b: 153 }, // punchy magenta/pink
+  { r: 14, g: 165, b: 233 } // electric cyan
 ];
 
 export const cloneColor = (color: RGBColor): RGBColor => ({ r: color.r, g: color.g, b: color.b });

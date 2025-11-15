@@ -35,6 +35,7 @@ export type Config = {
   nameEntryMode?: 'slots' | 'keyboard';
   symbolTheme?: 'classic' | 'pacman';
   symbolColors?: RGBColor[];
+  mazeBackgroundOpacity?: number;
 };
 
 export default class ConfigStore {

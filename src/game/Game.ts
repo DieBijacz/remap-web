@@ -3,6 +3,7 @@ import { Renderer2D } from '../render/Renderer2D';
 import { AnimationTimeline, easeOutCubic } from '../core/Animation';
 import { Timer } from '../core/Timer';
 import { drawSymbol, getSymbolPalette, SYMBOL_THEME_SETS } from '../render/Symbols';
+import { drawPacmanMazeBackground } from '../render/PacmanMazeBackground';
 import type { Symbol, SymbolType, SymbolTheme } from '../render/Symbols';
 import type { InputHandler } from '../input/InputManager';
 import type { Action } from '../input/Keymap';
@@ -344,6 +345,7 @@ interface GameConfig {
   symbolScale: number;
   symbolStroke: number;
   symbolTheme: SymbolTheme;
+  mazeBackgroundOpacity: number;
 }
 
 export class Game implements InputHandler {
@@ -370,6 +372,7 @@ export class Game implements InputHandler {
     symbolScale: 1,
     symbolStroke: 1,
     symbolTheme: 'classic',
+    mazeBackgroundOpacity: 0.35,
   };
   private timeDeltaValue = 0;
   private timeDeltaTimer = 0;
@@ -384,6 +387,7 @@ export class Game implements InputHandler {
     symbolScale: 1,
     symbolStroke: 1,
     symbolTheme: 'classic',
+    mazeBackgroundOpacity: 0.35,
   };
 
   private timer: Timer;
@@ -1454,6 +1458,11 @@ export class Game implements InputHandler {
       symbolScale: clamp(data.symbolScale ?? this.defaults.symbolScale, 0.6, 1.6),
       symbolStroke: clamp(data.symbolStroke ?? this.defaults.symbolStroke, 0.5, 1.8),
       symbolTheme: themeSetting,
+      mazeBackgroundOpacity: clamp(
+        typeof data.mazeBackgroundOpacity === 'number' ? data.mazeBackgroundOpacity : this.defaults.mazeBackgroundOpacity,
+        0,
+        1
+      ),
     };
     // Ensure floor is not above ceiling
     if (merged.minTimeBonus > merged.maxTimeBonus) {
@@ -2457,6 +2466,19 @@ export class Game implements InputHandler {
     ctx.restore();
   }
 
+  private drawMazeBackdrop(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    const opacity = this.config.mazeBackgroundOpacity;
+    if (opacity <= 0) {
+      return;
+    }
+    drawPacmanMazeBackground(ctx, width, height, {
+      opacity,
+      marginRatio: 0.065,
+      color: '#3d7bff',
+      glowColor: 'rgba(79, 209, 255, 0.75)'
+    });
+  }
+
   private drawAmbientSymbols(ctx: CanvasRenderingContext2D) {
     if (this.attractSymbols.length === 0) {
       return;
@@ -2845,6 +2867,7 @@ export class Game implements InputHandler {
     const width = r.w || this.renderer.canvas.width;
     const height = r.h || this.renderer.canvas.height;
     this.drawAttractBackground(ctx, width, height);
+    this.drawMazeBackdrop(ctx, width, height);
     this.drawAmbientSymbols(ctx);
     this.drawAttractPrompt(ctx, width, height);
   }
@@ -2858,6 +2881,9 @@ export class Game implements InputHandler {
       return;
     }
     r.clear('#0d1117');
+    const width = r.w || this.renderer.canvas.width;
+    const height = r.h || this.renderer.canvas.height;
+    this.drawMazeBackdrop(ctx, width, height);
     const anchor = this.getCanvasCenter();
     if (anchor.x !== this.lastRingCenter.x || anchor.y !== this.lastRingCenter.y) {
       this.updateRingLayout();

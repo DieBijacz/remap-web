@@ -267,6 +267,15 @@ export const SETTINGS_TABS: SettingsTab[] = [
                 max: 1.8,
                 step: 0.05,
                 format: (v) => `${v.toFixed(2)}x`
+              },
+              {
+                type: 'number',
+                key: 'mazeBackgroundOpacity',
+                label: 'Maze Background',
+                min: 0,
+                max: 1,
+                step: 0.05,
+                format: (v) => `${Math.round(v * 100)}%`
               }
             ]
           },
@@ -277,64 +286,43 @@ export const SETTINGS_TABS: SettingsTab[] = [
               {
                 type: 'color',
                 key: 'symbolColors',
-                label: 'Red',
+                label: '1',
                 index: 0,
                 step: 5
               },
               {
                 type: 'color',
                 key: 'symbolColors',
-                label: 'Magenta',
+                label: '2',
                 index: 1,
                 step: 5
               },
               {
                 type: 'color',
                 key: 'symbolColors',
-                label: 'Cyan',
+                label: '3',
                 index: 2,
                 step: 5
               },
               {
                 type: 'color',
                 key: 'symbolColors',
-                label: 'Dark Blue',
+                label: '4',
                 index: 3,
                 step: 5
               },
               {
                 type: 'color',
                 key: 'symbolColors',
-                label: 'Gold',
+                label: '5',
                 index: 4,
                 step: 5
               },
               {
                 type: 'color',
                 key: 'symbolColors',
-                label: 'Green',
+                label: '6',
                 index: 5,
-                step: 5
-              },
-              {
-                type: 'color',
-                key: 'symbolColors',
-                label: 'Mint',
-                index: 6,
-                step: 5
-              },
-              {
-                type: 'color',
-                key: 'symbolColors',
-                label: 'Amber',
-                index: 7,
-                step: 5
-              },
-              {
-                type: 'color',
-                key: 'symbolColors',
-                label: 'Violet',
-                index: 8,
                 step: 5
               }
             ]

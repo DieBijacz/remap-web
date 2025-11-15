@@ -71,12 +71,20 @@ export class App {
     const { particlesEnabled, scoreRayEnabled, ...rest } = raw;
     const persistedConfig: PersistentConfig = rest;
 
+    const clamp01 = (value: number | undefined, fallback: number) => {
+      if (typeof value !== 'number' || Number.isNaN(value)) {
+        return fallback;
+      }
+      return Math.max(0, Math.min(1, value));
+    };
+
     const persistedMemoryPreview = persistedConfig.memoryPreviewDuration ?? 1;
     const persistedParticlesPerScore = particlesEnabled === false ? 0 : persistedConfig.particlesPerScore ?? 4;
     const persistedScoreRayCount = scoreRayEnabled === false ? 0 : persistedConfig.scoreRayCount ?? 3;
     const persistedSymbolTheme = persistedConfig.symbolTheme === 'pacman' ? 'pacman' : 'classic';
     const nameEntryModeDefault = persistedConfig.nameEntryMode === 'keyboard' ? 'keyboard' : 'slots';
     const symbolColorSetting = sanitizeSymbolColors(persistedConfig.symbolColors);
+    const persistedMazeOpacity = clamp01(persistedConfig.mazeBackgroundOpacity ?? 0.35, 0.35);
 
     const settingsValues: PersistentConfig = {
       ...persistedConfig,
@@ -109,7 +117,8 @@ export class App {
       mechanicEnableJoystick: persistedConfig.mechanicEnableJoystick ?? true,
       mechanicEnableMatchColor: persistedConfig.mechanicEnableMatchColor ?? true,
       mechanicEnableMatchShape: persistedConfig.mechanicEnableMatchShape ?? true,
-      nameEntryMode: nameEntryModeDefault
+      nameEntryMode: nameEntryModeDefault,
+      mazeBackgroundOpacity: persistedMazeOpacity
     };
     this.configStore.save(settingsValues);
     return settingsValues;

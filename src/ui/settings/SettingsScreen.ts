@@ -39,6 +39,7 @@ export class SettingsScreen {
   private subTabButtonRects: DOMRect[] = [];
   private sectionButtonRects: DOMRect[] = [];
   private colorChannelFocus: Record<number, 0 | 1 | 2> = {};
+  private colorEditIndex: number | null = null;
   private subTabIndices: Partial<Record<SettingsTabKey, number>> = {};
   private sectionIndices: Record<string, number> = {};
 
@@ -52,6 +53,7 @@ export class SettingsScreen {
     this.values = { ...values };
     this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
     this.colorChannelFocus = {};
+    this.colorEditIndex = null;
     this.subTabFocus = false;
     this.sectionFocus = false;
     this.sectionIndices = {};
@@ -66,6 +68,7 @@ export class SettingsScreen {
     this.tabFocus = false;
     this.subTabFocus = false;
     this.sectionFocus = false;
+    this.colorEditIndex = null;
     this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
     this.draw();
   }
@@ -245,8 +248,11 @@ export class SettingsScreen {
       const isSelected = idx === this.selectionIndex;
       const displayY = y + rowHeight / 2;
 
+      const isColorItem = item.type === 'color';
+      const editingColor = isColorItem && this.isColorEditIndexActive(item.index);
+
       if (isSelected && item.type !== 'label') {
-        ctx.fillStyle = 'rgba(79, 70, 229, 0.18)';
+        ctx.fillStyle = editingColor ? 'rgba(217, 119, 6, 0.22)' : 'rgba(79, 70, 229, 0.18)';
         fillRoundedRect(
           ctx,
           marginX * 0.6,
@@ -263,7 +269,7 @@ export class SettingsScreen {
       if (item.type === 'label' && item.color) {
         labelColor = item.color;
       }
-      ctx.fillStyle = labelColor;
+      ctx.fillStyle = editingColor ? '#fde047' : labelColor;
       ctx.fillText(item.label, marginX, displayY);
 
       if (item.type === 'number') {
@@ -319,6 +325,7 @@ export class SettingsScreen {
           { label: 'B', value: color.b }
         ];
         const focusChannel = this.getColorChannel(item.index);
+        const editing = this.isColorEditIndexActive(item.index);
         ctx.font = `${valueSize}px Orbitron, sans-serif`;
         ctx.textAlign = 'right';
         const channelWidth = Math.max(
@@ -327,13 +334,15 @@ export class SettingsScreen {
           ctx.measureText('B:000').width
         );
         const channelGap = Math.max(20, rowHeight * 0.6);
+        const activeColor = editing ? '#fbbf24' : '#7ee787';
+        const selectedColor = editing ? '#fde68a' : '#cbd5f5';
         let cursorX = previewX - Math.max(18, rowHeight * 0.45);
         for (let channelIdx = channels.length - 1; channelIdx >= 0; channelIdx -= 1) {
           const channel = channels[channelIdx];
           const active = isSelected && focusChannel === channelIdx;
           const valueText = channel.value.toString().padStart(3, '0');
           const text = `${channel.label}:${valueText}`;
-          ctx.fillStyle = active ? '#7ee787' : isSelected ? '#cbd5f5' : '#94a3b8';
+          ctx.fillStyle = active ? activeColor : isSelected ? selectedColor : '#94a3b8';
           ctx.fillText(text, cursorX, displayY);
           cursorX -= channelWidth + channelGap;
         }
@@ -362,7 +371,7 @@ export class SettingsScreen {
     ctx.font = `${Math.max(9, Math.round(cssH * 0.02 * fontScale))}px Orbitron, sans-serif`;
     ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
     ctx.fillText(
-      'Arrows move and adjust - Press UP to focus section or sub-tabs, then main tabs - Enter toggles / cycles color channels - O hides settings',
+      'Arrows move - Press UP to focus section or sub-tabs, then tabs - Left/Right switch RGB channels - Enter toggles color edit (Up/Down change value) - O hides settings',
       cssW / 2,
       btnY - Math.max(24, Math.round(cssH * 0.06))
     );
@@ -416,6 +425,10 @@ export class SettingsScreen {
           }
           return false;
         }
+        if (this.isEditingColorOption(option)) {
+          this.adjustColorSetting(option, -1);
+          return false;
+        }
         this.moveSelection(1);
         return false;
       case 'up': {
@@ -436,6 +449,10 @@ export class SettingsScreen {
             this.tabFocus = true;
           }
           this.draw();
+          return false;
+        }
+        if (this.isEditingColorOption(option)) {
+          this.adjustColorSetting(option, 1);
           return false;
         }
         if (!this.tabHasSelectableSettings(this.currentTabIndex)) {
@@ -466,7 +483,11 @@ export class SettingsScreen {
         } else if (this.sectionFocus) {
           this.changeSection(-1);
         } else {
-          this.adjustOption(option, -1);
+          if (option?.type === 'color') {
+            this.changeColorChannel(option, -1);
+          } else {
+            this.adjustOption(option, -1);
+          }
         }
         return false;
       case 'right':
@@ -477,7 +498,11 @@ export class SettingsScreen {
         } else if (this.sectionFocus) {
           this.changeSection(1);
         } else {
-          this.adjustOption(option, 1);
+          if (option?.type === 'color') {
+            this.changeColorChannel(option, 1);
+          } else {
+            this.adjustOption(option, 1);
+          }
         }
         return false;
       case 'confirm':
@@ -522,6 +547,10 @@ export class SettingsScreen {
           this.draw();
           return false;
         }
+        if (option?.type === 'color') {
+          this.toggleColorEditMode(option);
+          return false;
+        }
         if (!option) {
           return false;
         }
@@ -529,11 +558,13 @@ export class SettingsScreen {
           this.triggerAction(option);
         } else if (option.type === 'toggle') {
           this.toggleSetting(option);
-        } else if (option.type === 'color') {
-          this.cycleColorChannel(option);
         }
         return false;
       case 'cancel':
+        if (this.colorEditIndex !== null) {
+          this.clearColorEditMode(true);
+          return false;
+        }
         return true;
       default:
         return false;
@@ -601,8 +632,6 @@ export class SettingsScreen {
       this.toggleSetting(option);
     } else if (option.type === 'cycle') {
       this.cycleOption(option, direction);
-    } else if (option.type === 'color') {
-      this.adjustColorSetting(option, direction);
     }
   }
 
@@ -663,11 +692,38 @@ export class SettingsScreen {
     this.persist({ [option.key]: nextPalette } as PersistentConfig);
   }
 
-  private cycleColorChannel(option: Extract<SettingItem, { type: 'color' }>) {
+  private changeColorChannel(option: Extract<SettingItem, { type: 'color' }>, direction: number) {
     const current = this.getColorChannel(option.index);
-    const next = ((current + 1) % 3) as 0 | 1 | 2;
+    const delta = direction === 0 ? 0 : direction > 0 ? 1 : -1;
+    const next = ((current + delta + 3) % 3) as 0 | 1 | 2;
     this.colorChannelFocus[option.index] = next;
     this.draw();
+  }
+
+  private toggleColorEditMode(option: Extract<SettingItem, { type: 'color' }>) {
+    if (this.isColorEditIndexActive(option.index)) {
+      this.clearColorEditMode(true);
+    } else {
+      this.colorEditIndex = option.index;
+      this.draw();
+    }
+  }
+
+  private isEditingColorOption(option: SettingItem | undefined): option is Extract<SettingItem, { type: 'color' }> {
+    return Boolean(option && option.type === 'color' && this.isColorEditIndexActive(option.index));
+  }
+
+  private isColorEditIndexActive(index: number) {
+    return this.colorEditIndex === index;
+  }
+
+  private clearColorEditMode(redraw = false) {
+    if (this.colorEditIndex !== null) {
+      this.colorEditIndex = null;
+      if (redraw) {
+        this.draw();
+      }
+    }
   }
 
   private getColorChannel(index: number): 0 | 1 | 2 {
@@ -687,6 +743,7 @@ export class SettingsScreen {
     for (let i = 0; i < items.length; i += 1) {
       next = (next + delta + items.length) % items.length;
       if (items[next].type !== 'label') {
+        this.clearColorEditMode();
         this.selectionIndex = next;
         this.draw();
         return;
@@ -701,6 +758,7 @@ export class SettingsScreen {
 
   private selectTab(index: number, options?: { focusMode?: 'tabs' | 'content' }) {
     if (SETTINGS_TABS.length === 0) return;
+    this.clearColorEditMode();
     const normalized = ((index % SETTINGS_TABS.length) + SETTINGS_TABS.length) % SETTINGS_TABS.length;
     this.currentTabIndex = normalized;
     const tab = this.getCurrentTab();
@@ -796,6 +854,7 @@ export class SettingsScreen {
   }
 
   private changeSubTab(delta: number) {
+    this.clearColorEditMode();
     const tab = this.getCurrentTab();
     const subTabs = tab.subTabs ?? [];
     if (subTabs.length === 0) return;
@@ -813,6 +872,7 @@ export class SettingsScreen {
   }
 
   private selectSubTab(index: number) {
+    this.clearColorEditMode();
     const tab = this.getCurrentTab();
     const subTabs = tab.subTabs ?? [];
     if (subTabs.length === 0) return;
@@ -841,6 +901,7 @@ export class SettingsScreen {
   }
 
   private changeSection(delta: number) {
+    this.clearColorEditMode();
     const tab = this.getCurrentTab();
     const subTab = this.getCurrentSubTab();
     const sections = subTab?.sections ?? [];
@@ -855,6 +916,7 @@ export class SettingsScreen {
   }
 
   private selectSection(index: number) {
+    this.clearColorEditMode();
     const tab = this.getCurrentTab();
     const subTab = this.getCurrentSubTab();
     const sections = subTab?.sections ?? [];
