@@ -1,4 +1,4 @@
-import { Clock, PausableTime } from '../core/Clock';
+﻿import { Clock, PausableTime } from '../core/Clock';
 import { Renderer2D } from '../render/Renderer2D';
 import { AnimationTimeline, easeOutCubic } from '../core/Animation';
 import { Timer } from '../core/Timer';
@@ -131,6 +131,12 @@ interface HudMetrics {
   labelOffset: number;
   scoreBlockHeight: number;
   scoreStripBottom: number;
+  stripLeft: number;
+  stripRight: number;
+  stripHeight: number;
+  streakBadge: { x: number; y: number; width: number; height: number };
+  bestBadge: { x: number; y: number; width: number; height: number };
+  scoreArea: { x: number; width: number; centerX: number; centerY: number };
 }
 
 interface MechanicLevelUpNotice {
@@ -3119,25 +3125,25 @@ export class Game implements InputHandler {
 
   private drawScoreboard(ctx: CanvasRenderingContext2D, opacity = 1): HudMetrics {
     const r = this.renderer;
-    const hudPad = Math.round(Math.max(8, r.h * 0.02));
-    const scoreFontSize = Math.max(24, Math.round(r.h * 0.07));
-    const stripTop = Math.max(0, Math.round(hudPad * 0.12));
-    const stripPadding = Math.round(hudPad * 0.5);
-    const labelFontSize = Math.max(10, Math.round(scoreFontSize * 0.26));
-    const valueFontSize = Math.max(14, Math.round(scoreFontSize * 0.44));
-    const labelOffset = Math.max(2, Math.round(r.h * 0.004));
-    const scoreBlockHeight = Math.max(scoreFontSize, labelFontSize + labelOffset + valueFontSize);
-    const topY = stripTop + stripPadding;
-    const hudCenterX = Math.round(r.w / 2);
-    const scoreCenterY = topY + scoreFontSize / 2;
-    const scorePulseRatio = Math.min(1, Math.max(0, this.scorePulseTimer / SCORE_PULSE_DURATION));
-    const scorePulse = scorePulseRatio > 0 ? easeInCubic(scorePulseRatio) : 0;
-    const scoreScale = 1 + SCORE_PULSE_SCALE * scorePulse;
-    const scoreGlow = 0;
-    const scoreGlowColor = 'rgba(0, 0, 0, 0)';
+    const hudPad = Math.round(Math.max(10, r.h * 0.02));
+    const scoreFontSize = Math.max(28, Math.round(r.h * 0.075));
+    const stripTop = Math.round(hudPad * 0.4);
+    const stripHeight = Math.max(scoreFontSize * 1.5, Math.round(r.h * 0.12));
+    const labelFontSize = Math.max(12, Math.round(scoreFontSize * 0.3));
+    const valueFontSize = Math.max(16, Math.round(scoreFontSize * 0.46));
+    const labelOffset = Math.max(3, Math.round(r.h * 0.005));
+    const scoreBlockHeight = stripHeight - labelFontSize - labelOffset;
+    const topY = stripTop + Math.round((stripHeight - scoreFontSize) / 2);
+    const scoreStripBottom = stripTop + stripHeight;
+    const stripLeft = hudPad;
+    const stripRight = r.w - hudPad;
+    const stripWidth = stripRight - stripLeft;
+    const dividerGlowWidth = Math.max(2, Math.round(stripWidth * 0.003));
 
-    const scoreStripBottom = topY + scoreBlockHeight + stripPadding;
-    const stripHeight = scoreStripBottom - stripTop;
+    const centerWidth = Math.max(stripWidth * 0.34, 280);
+    const sideWidth = Math.max((stripWidth - centerWidth) / 2, 140);
+    const adjustedCenterWidth = stripWidth - sideWidth * 2;
+
     const metrics: HudMetrics = {
       hudPad,
       topY,
@@ -3146,57 +3152,129 @@ export class Game implements InputHandler {
       valueFontSize,
       labelOffset,
       scoreBlockHeight,
-      scoreStripBottom
+      scoreStripBottom,
+      stripLeft,
+      stripRight,
+      stripHeight,
+      streakBadge: {
+        x: stripLeft,
+        y: stripTop,
+        width: sideWidth,
+        height: stripHeight
+      },
+      bestBadge: {
+        x: stripRight - sideWidth,
+        y: stripTop,
+        width: sideWidth,
+        height: stripHeight
+      },
+      scoreArea: {
+        x: stripLeft + sideWidth,
+        width: adjustedCenterWidth,
+        centerX: stripLeft + sideWidth + adjustedCenterWidth / 2,
+        centerY: stripTop + stripHeight / 2
+      }
     };
 
-    const clampedOpacity = Math.max(0, Math.min(1, opacity));
+    const clampedOpacity = clamp(opacity, 0, 1);
     if (clampedOpacity <= 0) {
       return metrics;
     }
 
+    const gradient = ctx.createLinearGradient(stripLeft, stripTop, stripRight, stripTop);
+    gradient.addColorStop(0, 'rgba(8, 12, 20, 0.85)');
+    gradient.addColorStop(0.5, 'rgba(5, 9, 16, 0.95)');
+    gradient.addColorStop(1, 'rgba(8, 12, 20, 0.85)');
+
+    const drawRoundRect = (x: number, y: number, w: number, h: number, radius: number) => {
+      const rads = Math.min(radius, Math.min(w, h) / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rads, y);
+      ctx.lineTo(x + w - rads, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + rads);
+      ctx.lineTo(x + w, y + h - rads);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - rads, y + h);
+      ctx.lineTo(x + rads, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - rads);
+      ctx.lineTo(x, y + rads);
+      ctx.quadraticCurveTo(x, y, x + rads, y);
+      ctx.closePath();
+    };
+
     ctx.save();
     ctx.globalAlpha *= clampedOpacity;
-    ctx.fillStyle = 'rgba(8, 12, 20, 0.82)';
-    ctx.fillRect(0, stripTop, r.w, stripHeight);
-    const separatorHeight = Math.max(1, Math.round(r.h * 0.002));
-    ctx.fillStyle = 'rgba(121, 192, 255, 0.28)';
-    ctx.fillRect(hudPad, scoreStripBottom - Math.max(1, separatorHeight), r.w - hudPad * 2, separatorHeight);
+    drawRoundRect(stripLeft, stripTop, stripWidth, stripHeight, stripHeight / 2.4);
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    const dividerXLeft = stripLeft + sideWidth;
+    const dividerXRight = stripRight - sideWidth;
+    const dividerGradientLeft = ctx.createLinearGradient(dividerXLeft - dividerGlowWidth, 0, dividerXLeft + dividerGlowWidth, 0);
+    dividerGradientLeft.addColorStop(0, 'rgba(0,0,0,0)');
+    dividerGradientLeft.addColorStop(0.5, 'rgba(120, 192, 255, 0.35)');
+    dividerGradientLeft.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = dividerGradientLeft;
+    ctx.fillRect(dividerXLeft - dividerGlowWidth, stripTop + 4, dividerGlowWidth * 2, stripHeight - 8);
+    const dividerGradientRight = ctx.createLinearGradient(dividerXRight - dividerGlowWidth, 0, dividerXRight + dividerGlowWidth, 0);
+    dividerGradientRight.addColorStop(0, 'rgba(0,0,0,0)');
+    dividerGradientRight.addColorStop(0.5, 'rgba(120, 192, 255, 0.35)');
+    dividerGradientRight.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = dividerGradientRight;
+    ctx.fillRect(dividerXRight - dividerGlowWidth, stripTop + 4, dividerGlowWidth * 2, stripHeight - 8);
+    ctx.restore();
 
     this.drawScoreTracers(ctx);
+
+    const scorePulseRatio = clamp(this.scorePulseTimer / SCORE_PULSE_DURATION, 0, 1);
+    const scoreScale = 1 + SCORE_PULSE_SCALE * easeInCubic(scorePulseRatio);
+
     ctx.save();
-    ctx.textBaseline = 'top';
     ctx.textAlign = 'center';
-    ctx.translate(hudCenterX, scoreCenterY);
+    ctx.textBaseline = 'middle';
+    ctx.translate(metrics.scoreArea.centerX, metrics.scoreArea.centerY);
     ctx.scale(scoreScale, scoreScale);
-    ctx.translate(-hudCenterX, -scoreCenterY);
+    ctx.translate(-metrics.scoreArea.centerX, -metrics.scoreArea.centerY);
     ctx.font = `${scoreFontSize}px Orbitron, sans-serif`;
-    ctx.fillStyle = '#ffffff';
-    ctx.shadowColor = scoreGlowColor;
-    ctx.shadowBlur = scoreGlow;
-    ctx.fillText(`${this.score}`, hudCenterX, topY);
+    ctx.fillStyle = '#f8fbff';
+    ctx.shadowColor = 'rgba(121,192,255,0.45)';
+    ctx.shadowBlur = 12;
+    ctx.fillText(`${this.score}`, metrics.scoreArea.centerX, metrics.scoreArea.centerY);
     ctx.restore();
-    ctx.shadowBlur = 3;
-    ctx.shadowColor = 'rgba(0,0,0,0.6)';
 
-    ctx.textBaseline = 'top';
+    const drawBadge = (
+      badge: HudMetrics['streakBadge'],
+      label: string,
+      value: string,
+      baseColor: string,
+      glowColor: string,
+      align: 'left' | 'right'
+    ) => {
+      ctx.save();
+      const paddingX = Math.max(12, badge.width * 0.14);
+      const labelY = badge.y + Math.max(8, badge.height * 0.18);
+      ctx.font = `${labelFontSize}px Orbitron, sans-serif`;
+      ctx.textBaseline = 'top';
+      ctx.textAlign = align;
+      ctx.fillStyle = baseColor;
+      ctx.shadowColor = glowColor;
+      ctx.shadowBlur = 8;
+      const textX = align === 'left' ? badge.x + paddingX : badge.x + badge.width - paddingX;
+      ctx.fillText(label, textX, labelY);
+      ctx.font = `${valueFontSize}px Orbitron, sans-serif`;
+      ctx.textBaseline = 'top';
+      ctx.fillText(value, textX, labelY + labelFontSize + labelOffset);
+      ctx.restore();
+    };
 
-    ctx.textAlign = 'left';
-    ctx.font = `${labelFontSize}px Orbitron, sans-serif`;
-    ctx.fillStyle = 'rgba(126, 231, 135, 0.7)';
-    ctx.fillText('Streak', hudPad, topY);
-    ctx.font = `${valueFontSize}px Orbitron, sans-serif`;
-    ctx.fillStyle = '#7ee787';
-    ctx.fillText(`${this.streak}`, hudPad, topY + labelFontSize + labelOffset);
+    const streakHot = clamp(this.streak / 20, 0, 1);
+    const streakColorCold = 'rgba(90, 118, 148, 0.8)';
+    const streakColorHot = '#7ee787';
+    const streakGlow = streakHot > 0.6 ? '#7ee787' : 'rgba(120,192,255,0.25)';
+    const streakColor = streakHot >= 1 ? streakColorHot : `rgba(${Math.round(90 + (126 - 90) * streakHot)}, ${Math.round(118 + (231 - 118) * streakHot)}, ${Math.round(148 + (135 - 148) * streakHot)}, ${0.6 + 0.4 * streakHot})`;
 
-    ctx.textAlign = 'right';
-    ctx.font = `${labelFontSize}px Orbitron, sans-serif`;
-    ctx.fillStyle = 'rgba(121, 192, 255, 0.7)';
-    ctx.fillText('Best', r.w - hudPad, topY);
-    ctx.font = `${valueFontSize}px Orbitron, sans-serif`;
-    ctx.fillStyle = '#79c0ff';
-    ctx.fillText(`${this.highscore}`, r.w - hudPad, topY + labelFontSize + labelOffset);
+    drawBadge(metrics.streakBadge, 'Streak', `${this.streak}`, streakHot > 0 ? streakColor : streakColorCold, streakGlow, 'left');
 
-    ctx.restore();
+    drawBadge(metrics.bestBadge, 'Best', `${this.highscore}`, '#79c0ff', 'rgba(121,192,255,0.5)', 'right');
 
     return metrics;
   }
@@ -3225,100 +3303,35 @@ export class Game implements InputHandler {
   }
 
   private drawMechanicBanner(ctx: CanvasRenderingContext2D, metrics: HudMetrics) {
-    const r = this.renderer;
     const showRemapMapping = this.activeMechanics.includes('remap') && this.remapMapping;
-    const bannerText = this.mechanicBannerText ? this.mechanicBannerText.trim() : '';
-    if (!showRemapMapping && !bannerText) {
+    const bannerTextRaw = this.mechanicBannerText ? this.mechanicBannerText.trim() : '';
+    if (!showRemapMapping && !bannerTextRaw) {
       return;
     }
 
-    const { scoreStripBottom } = metrics;
-    const center = (this.playfieldCenter.x !== 0 || this.playfieldCenter.y !== 0)
-      ? this.playfieldCenter
-      : this.getCanvasCenter();
-    const radius = this.getRingRadius();
-    const scaleFactor = this.ringSymbolScale / BASE_RING_SYMBOL_SCALE;
-    const rowScale = clamp(r.h * 0.0013, 0.52, 0.78) * scaleFactor;
-    const symbolSize = 46 * rowScale;
-    const spacing = Math.max(symbolSize * 0.32, 18);
-    const arrowWidth = Math.max(symbolSize * 1.35, 54);
-    const arrowThickness = Math.max(symbolSize * 0.26, 9);
-    const arrowHead = arrowWidth * 0.24;
-    const arrowHeadHeight = arrowThickness * 1.35;
-    const totalWidth = symbolSize * 2 + arrowWidth + spacing * 2;
-    const centerX = r.w / 2;
-    const ringTop = center.y - radius;
-
-    const descriptorTokens = bannerText
-      ? bannerText.split('|').map((token) => token.trim()).filter((token) => token.length > 0)
+    const tokens = bannerTextRaw
+      ? bannerTextRaw.split('|').map((token) => token.trim()).filter(Boolean)
       : [];
-    let descriptorLines: string[] = [];
-    if (descriptorTokens.length === 0) {
-      if (bannerText) descriptorLines = [bannerText];
-    } else if (descriptorTokens.length <= 2) {
-      descriptorLines = [descriptorTokens.join('  â€¢  ')];
-    } else {
-      const maxLines = Math.min(3, Math.ceil(descriptorTokens.length / 2));
-      const perLine = Math.ceil(descriptorTokens.length / maxLines);
-      for (let i = 0; i < descriptorTokens.length; i += perLine) {
-        descriptorLines.push(descriptorTokens.slice(i, i + perLine).join('  â€¢  '));
-      }
-    }
+    const bannerText = tokens.length > 0 ? tokens.join(' • ') : bannerTextRaw;
 
-    const descriptorFontSize = Math.max(14, Math.round(r.h * 0.034));
-    const descriptorLineSpacing = Math.max(6, Math.round(descriptorFontSize * 0.3));
-    ctx.save();
-    ctx.font = `${descriptorFontSize}px Orbitron, sans-serif`;
-    const descriptorWidth = descriptorLines.length > 0
-      ? Math.max(...descriptorLines.map((line) => ctx.measureText(line).width))
-      : 0;
-    ctx.restore();
-    const descriptorsHeight = descriptorLines.length > 0
-      ? descriptorLines.length * descriptorFontSize + (descriptorLines.length - 1) * descriptorLineSpacing
-      : 0;
+    const accentMechanic = showRemapMapping
+      ? 'remap'
+      : this.activeMechanics.length > 0
+        ? this.activeMechanics[0]
+        : 'none';
+    const accentColor = MECHANIC_COLORS[accentMechanic] ?? '#79c0ff';
 
-    const mappingHeight = showRemapMapping ? symbolSize : 0;
-    const mappingDescriptorSpacing = mappingHeight > 0 && descriptorsHeight > 0 ? Math.max(symbolSize * 0.2, 12) : 0;
-    const contentWidth = Math.max(showRemapMapping ? totalWidth : 0, descriptorWidth);
-    const contentHeight = mappingHeight + mappingDescriptorSpacing + descriptorsHeight;
+    const bannerPadding = Math.max(16, metrics.hudPad);
+    const bannerHeight = Math.max(40, Math.round(metrics.scoreFontSize * 0.45));
+    const bannerTop = metrics.scoreStripBottom + Math.max(8, metrics.hudPad * 0.25);
+    const bannerLeft = metrics.stripLeft + bannerPadding * 0.4;
+    const bannerRight = metrics.stripRight - bannerPadding * 0.4;
+    const bannerWidth = Math.max(120, bannerRight - bannerLeft);
+    const cornerRadius = bannerHeight / 2.1;
 
-    const boxPaddingX = Math.max(24, symbolSize * 0.4);
-    const boxPaddingY = Math.max(16, symbolSize * 0.3);
-    const boxWidth = contentWidth + boxPaddingX * 2;
-    const boxHeight = contentHeight + boxPaddingY * 2;
-
-    const spanTop = scoreStripBottom;
-    const spanBottom = ringTop;
-    const centerY = spanTop + Math.max(0, (spanBottom - spanTop) / 2);
-    let boxTop = centerY - boxHeight / 2;
-    let boxBottom = boxTop + boxHeight;
-
-    const minGap = Math.max(12, symbolSize * 0.26);
-    const minTop = spanTop + minGap;
-    const maxBottom = spanBottom - minGap;
-
-    if (boxTop < minTop) {
-      const shift = minTop - boxTop;
-      boxTop += shift;
-      boxBottom += shift;
-    }
-    if (boxBottom > maxBottom) {
-      const shift = boxBottom - maxBottom;
-      boxTop -= shift;
-      boxBottom -= shift;
-      if (boxTop < minTop) {
-        boxTop = minTop;
-        boxBottom = boxTop + boxHeight;
-        if (boxBottom > maxBottom) {
-          boxBottom = maxBottom;
-          boxTop = boxBottom - boxHeight;
-        }
-      }
-    }
-
-    const boxLeft = centerX - boxWidth / 2;
-    const innerTop = boxTop + boxPaddingY;
-    const cornerRadius = Math.min(boxHeight / 2, Math.max(16, symbolSize * 0.35));
+    const mappingWidth = showRemapMapping ? Math.max(110, bannerHeight * 2.6) : 0;
+    const mappingSpacing = showRemapMapping ? Math.max(18, bannerHeight * 0.4) : 0;
+    const textWidth = bannerWidth - mappingWidth - mappingSpacing - Math.max(16, bannerPadding);
 
     const drawRoundedRect = (x: number, y: number, width: number, height: number, radius: number) => {
       const rad = Math.min(radius, height / 2, width / 2);
@@ -3336,422 +3349,81 @@ export class Game implements InputHandler {
     };
 
     ctx.save();
-    drawRoundedRect(boxLeft, boxTop, boxWidth, boxHeight, cornerRadius);
-    ctx.fillStyle = 'rgba(12, 17, 27, 0.82)';
+    drawRoundedRect(bannerLeft, bannerTop, bannerWidth, bannerHeight, cornerRadius);
+    const gradient = ctx.createLinearGradient(bannerLeft, bannerTop, bannerRight, bannerTop);
+    gradient.addColorStop(0, 'rgba(7, 10, 18, 0.85)');
+    gradient.addColorStop(1, 'rgba(4, 7, 12, 0.92)');
+    ctx.fillStyle = gradient;
     ctx.fill();
-    ctx.strokeStyle = 'rgba(121, 192, 255, 0.28)';
-    ctx.lineWidth = Math.max(1.2, symbolSize * 0.08);
+    ctx.strokeStyle = colorWithAlpha(accentColor, 0.65, 0.2);
+    ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
 
-    if (showRemapMapping && this.remapMapping) {
-      const mappingCenterY = innerTop + symbolSize / 2;
-      let cursor = centerX - totalWidth / 2;
-      const leftX = cursor + symbolSize / 2;
-      cursor += symbolSize + spacing;
-      const arrowX = cursor + arrowWidth / 2;
-      cursor += arrowWidth + spacing;
-      const rightX = cursor + symbolSize / 2;
+    ctx.save();
+    ctx.font = Math.max(14, Math.round(bannerHeight * 0.48)) + 'px Orbitron, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#f5faff';
+    ctx.shadowColor = colorWithAlpha(accentColor, 0.4, 0.2);
+    ctx.shadowBlur = 8;
+    const textX = bannerLeft + Math.max(16, bannerPadding * 0.8);
+    const textY = bannerTop + bannerHeight / 2;
+    const textToRender = bannerText || (showRemapMapping ? 'Remap Active' : 'Mechanics Ready');
+    let displayText = textToRender;
+    if (ctx.measureText(displayText).width > textWidth) {
+      while (displayText.length > 1 && ctx.measureText(displayText + '…').width > textWidth) {
+        displayText = displayText.slice(0, -1);
+      }
+      displayText = displayText + '…';
+    }
+    ctx.fillText(displayText, textX, textY);
+    ctx.restore();
 
+    if (showRemapMapping && this.remapMapping) {
+      const scaleFactor = clamp(this.renderer.h * 0.0009, 0.45, 0.7);
+      const symbolSize = 40 * scaleFactor;
+      const mappingLeft = bannerRight - mappingWidth + Math.max(10, bannerPadding * 0.4);
+      const mappingCenterY = bannerTop + bannerHeight / 2;
+      const symbolSpacing = Math.max(12, symbolSize * 0.4);
+      const arrowWidth = Math.max(40, symbolSize * 0.9);
       const leftSymbol: Symbol = {
         type: this.remapMapping.from,
-        x: leftX,
+        x: mappingLeft + symbolSize / 2,
         y: mappingCenterY,
-        scale: rowScale,
+        scale: scaleFactor,
         rotation: 0,
         color: this.getColorForSymbolType(this.remapMapping.from)
       };
       const rightSymbol: Symbol = {
         type: this.remapMapping.to,
-        x: rightX,
+        x: mappingLeft + symbolSize / 2 + arrowWidth + symbolSpacing + symbolSize,
         y: mappingCenterY,
-        scale: rowScale,
+        scale: scaleFactor,
         rotation: 0,
         color: this.getColorForSymbolType(this.remapMapping.to)
       };
-      const bannerStroke = Math.max(0.4, this.symbolStrokeScale * 0.85);
-      drawSymbol(ctx, leftSymbol, true, bannerStroke);
-      drawSymbol(ctx, rightSymbol, true, bannerStroke);
+      drawSymbol(ctx, leftSymbol, true, this.symbolStrokeScale * 0.9);
+      drawSymbol(ctx, rightSymbol, true, this.symbolStrokeScale * 0.9);
 
       ctx.save();
-      ctx.translate(arrowX, mappingCenterY);
+      const arrowStartX = mappingLeft + symbolSize + symbolSpacing;
+      ctx.strokeStyle = colorWithAlpha(accentColor, 0.85, 0.15);
+      ctx.lineWidth = Math.max(6, symbolSize * 0.3);
+      ctx.lineCap = 'round';
       ctx.beginPath();
-      const halfThickness = arrowThickness / 2;
-      const bodyLength = arrowWidth - arrowHead;
-      const bodyStart = -arrowWidth / 2;
-      const bodyEnd = bodyStart + bodyLength;
-      ctx.moveTo(bodyStart, -halfThickness);
-      ctx.lineTo(bodyEnd, -halfThickness);
-      ctx.lineTo(bodyEnd, -arrowHeadHeight);
-      ctx.lineTo(arrowWidth / 2, 0);
-      ctx.lineTo(bodyEnd, arrowHeadHeight);
-      ctx.lineTo(bodyEnd, halfThickness);
-      ctx.lineTo(bodyStart, halfThickness);
-      ctx.closePath();
-      const arrowColor = MECHANIC_COLORS.remap;
-      ctx.fillStyle = arrowColor;
-      ctx.globalAlpha = 0.92;
-      ctx.shadowColor = arrowColor;
-      ctx.shadowBlur = 14;
-      ctx.fill();
-      ctx.restore();
-    }
-
-    if (descriptorLines.length > 0) {
-      let lineY = innerTop + mappingHeight + mappingDescriptorSpacing + descriptorFontSize / 2;
-      ctx.save();
-      ctx.font = `${descriptorFontSize}px Orbitron, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = colorWithAlpha('#cdd9e5', 0.95);
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-      ctx.shadowBlur = 6;
-      descriptorLines.forEach((line) => {
-        ctx.fillText(line, centerX, lineY);
-        lineY += descriptorFontSize + descriptorLineSpacing;
-      });
-      ctx.restore();
-    }
-
-  }
-
-  private drawNameEntryPanel(ctx: CanvasRenderingContext2D) {
-    const { w, h } = this.renderer;
-    ctx.save();
-    ctx.fillStyle = 'rgba(6, 10, 18, 0.72)';
-    ctx.fillRect(0, 0, w, h);
-    ctx.restore();
-
-    const panelWidth = Math.min(w * 0.85, 720);
-    const paddingX = Math.max(28, panelWidth * 0.05);
-    const paddingY = Math.max(24, Math.round(h * 0.04));
-    const titleSize = Math.max(24, Math.round(h * 0.05));
-    const subtitleSize = Math.max(18, Math.round(h * 0.03));
-    const instructionsSize = Math.max(16, Math.round(h * 0.028));
-    const gapTitle = Math.max(12, Math.round(h * 0.018));
-    const gapAfterTitle = Math.max(18, Math.round(h * 0.025));
-    const gapAfterSlots = Math.max(24, Math.round(h * 0.03));
-    const slotSpacing = Math.max(8, Math.round(panelWidth * 0.012));
-    const slotWidth = Math.min(
-      64,
-      Math.max(
-        36,
-        (panelWidth - paddingX * 2 - slotSpacing * (NAME_SLOT_COUNT - 1)) / NAME_SLOT_COUNT
-      )
-    );
-    const slotHeight = Math.max(48, slotWidth * 1.05);
-    const slotsWidth = NAME_SLOT_COUNT * slotWidth + (NAME_SLOT_COUNT - 1) * slotSpacing;
-
-    const baseKeyWidth = Math.min(56, (panelWidth - paddingX * 2) / 11);
-    const keySpacing = Math.max(8, baseKeyWidth * 0.25);
-    const keyHeight = Math.max(44, baseKeyWidth * 0.95);
-    const keyboardHeight =
-      this.nameEntryMode === 'keyboard'
-        ? NAME_KEYBOARD_ROWS.length * keyHeight + keySpacing * (NAME_KEYBOARD_ROWS.length - 1)
-        : 0;
-
-    let panelHeight =
-      paddingY * 2 +
-      titleSize +
-      gapTitle +
-      subtitleSize +
-      gapAfterTitle +
-      slotHeight +
-      gapAfterSlots +
-      instructionsSize;
-    if (this.nameEntryMode === 'keyboard') {
-      panelHeight += keyboardHeight + gapAfterSlots;
-    }
-
-    const panelX = (w - panelWidth) / 2;
-    const panelY = (h - panelHeight) / 2;
-
-    const drawRoundedRect = (x: number, y: number, width: number, height: number, radius: number) => {
-      const rad = Math.min(radius, height / 2, width / 2);
-      ctx.beginPath();
-      ctx.moveTo(x + rad, y);
-      ctx.lineTo(x + width - rad, y);
-      ctx.quadraticCurveTo(x + width, y, x + width, y + rad);
-      ctx.lineTo(x + width, y + height - rad);
-      ctx.quadraticCurveTo(x + width, y + height, x + width - rad, y + height);
-      ctx.lineTo(x + rad, y + height);
-      ctx.quadraticCurveTo(x, y + height, x, y + height - rad);
-      ctx.lineTo(x, y + rad);
-      ctx.quadraticCurveTo(x, y, x + rad, y);
-      ctx.closePath();
-    };
-
-    ctx.save();
-    drawRoundedRect(panelX, panelY, panelWidth, panelHeight, Math.min(32, panelHeight * 0.08));
-    ctx.fillStyle = 'rgba(12, 18, 28, 0.95)';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(121, 192, 255, 0.35)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.restore();
-
-    let currentY = panelY + paddingY;
-    const placementText =
-      this.pendingPlacement != null
-        ? `Rank ${this.pendingPlacement + 1}/${LEADERBOARD_MAX_ENTRIES}`
-        : `Top ${LEADERBOARD_MAX_ENTRIES}`;
-    const subtitle = `${placementText} | Score ${this.finalScore}`;
-
-    ctx.save();
-    ctx.font = `${titleSize}px Orbitron, sans-serif`;
-    ctx.fillStyle = '#79c0ff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText('Enter Your Name', w / 2, currentY);
-    ctx.restore();
-
-    currentY += titleSize + gapTitle;
-
-    ctx.save();
-    ctx.font = `${subtitleSize}px Orbitron, sans-serif`;
-    ctx.fillStyle = 'rgba(205, 217, 229, 0.9)';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(subtitle, w / 2, currentY);
-    ctx.restore();
-
-    currentY += subtitleSize + gapAfterTitle;
-
-    const slotsX = (w - slotsWidth) / 2;
-    const keyboardActiveSlot =
-      this.nameInputBuffer.length >= NAME_SLOT_COUNT
-        ? NAME_SLOT_COUNT - 1
-        : this.nameInputBuffer.length;
-    const activeSlot =
-      this.nameEntryMode === 'slots' ? this.nameEntryCursor : keyboardActiveSlot;
-
-    for (let i = 0; i < NAME_SLOT_COUNT; i += 1) {
-      const x = slotsX + i * (slotWidth + slotSpacing);
-      const isActive = activeSlot === i;
-      const radius = Math.min(12, slotHeight * 0.25);
-      ctx.save();
-      drawRoundedRect(x, currentY, slotWidth, slotHeight, radius);
-      ctx.fillStyle = isActive ? 'rgba(121, 192, 255, 0.18)' : 'rgba(14, 21, 32, 0.95)';
-      ctx.fill();
-      ctx.strokeStyle = isActive ? '#79c0ff' : 'rgba(148, 163, 184, 0.55)';
-      ctx.lineWidth = isActive ? 3 : 1.5;
+      ctx.moveTo(arrowStartX, mappingCenterY);
+      ctx.lineTo(arrowStartX + arrowWidth, mappingCenterY);
       ctx.stroke();
-      const char = this.nameEntrySlots[i] ?? ' ';
-      ctx.font = `${Math.max(24, slotHeight * 0.55)}px Orbitron, sans-serif`;
-      ctx.fillStyle = '#f8fafc';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(char.trim() ? char : '_', x + slotWidth / 2, currentY + slotHeight / 2);
-      ctx.restore();
-    }
-
-    currentY += slotHeight;
-
-    if (this.nameEntryMode === 'keyboard') {
-      currentY += gapAfterSlots;
-      const getKeyWidth = (value: string) => {
-        if (value === NAME_KEYBOARD_SPECIAL.SPACE) return baseKeyWidth * 2.6;
-        if (value === NAME_KEYBOARD_SPECIAL.BACK) return baseKeyWidth * 1.8;
-        if (value === NAME_KEYBOARD_SPECIAL.OK) return baseKeyWidth * 1.4;
-        return baseKeyWidth;
-      };
-      const keyFontSize = Math.max(16, keyHeight * 0.45);
-      NAME_KEYBOARD_ROWS.forEach((row, rowIndex) => {
-        const widths = row.map(getKeyWidth);
-        const totalRowWidth =
-          widths.reduce((sum, width) => sum + width, 0) +
-          keySpacing * Math.max(0, row.length - 1);
-        let keyX = panelX + (panelWidth - totalRowWidth) / 2;
-        row.forEach((value, colIndex) => {
-          const width = widths[colIndex];
-          const selected = rowIndex === this.nameKeyboardRow && colIndex === this.nameKeyboardCol;
-          ctx.save();
-          drawRoundedRect(keyX, currentY, width, keyHeight, Math.min(12, keyHeight * 0.3));
-          ctx.fillStyle = selected ? 'rgba(121, 192, 255, 0.2)' : 'rgba(16, 25, 38, 0.94)';
-          ctx.fill();
-          ctx.strokeStyle = selected ? '#79c0ff' : 'rgba(148, 163, 184, 0.5)';
-          ctx.lineWidth = selected ? 3 : 1.2;
-          ctx.stroke();
-          ctx.font = `${keyFontSize}px Orbitron, sans-serif`;
-          ctx.fillStyle = '#e2e8f0';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          const label =
-            value === NAME_KEYBOARD_SPECIAL.SPACE
-              ? 'SPACE'
-              : value === NAME_KEYBOARD_SPECIAL.BACK
-                ? 'BACK'
-                : value;
-          ctx.fillText(label, keyX + width / 2, currentY + keyHeight / 2);
-          ctx.restore();
-          keyX += width + keySpacing;
-        });
-        currentY += keyHeight;
-        if (rowIndex < NAME_KEYBOARD_ROWS.length - 1) {
-          currentY += keySpacing;
-        }
-      });
-      currentY += gapAfterSlots;
-    } else {
-      currentY += gapAfterSlots;
-    }
-
-    const instructions =
-      this.nameEntryMode === 'keyboard'
-        ? 'Use arrows to move. Enter selects. Choose OK when finished.'
-        : 'Use arrows to change letters. Press Enter when ready.';
-    const instructionsY = panelY + panelHeight - paddingY - instructionsSize;
-
-    ctx.save();
-    ctx.font = `${instructionsSize}px Orbitron, sans-serif`;
-    ctx.fillStyle = 'rgba(205, 217, 229, 0.88)';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(instructions, w / 2, instructionsY);
-    ctx.restore();
-  }
-
-  // Leaderboard overlay rendering removed; handled in UI layer.
-
-  private drawMechanicLevelAnnouncement(ctx: CanvasRenderingContext2D) {
-    const notice = this.mechanicLevelUpNotice;
-    if (!notice) {
-      return;
-    }
-
-    const { w, h } = this.renderer;
-    ctx.save();
-    ctx.fillStyle = 'rgba(5, 8, 14, 0.75)';
-    ctx.fillRect(0, 0, w, h);
-    ctx.restore();
-
-    const cardWidth = Math.min(w * 0.72, 620);
-    const cardHeight = Math.max(h * 0.24, 210);
-    const cardX = (w - cardWidth) / 2;
-    const cardY = Math.max(h * 0.18, (h - cardHeight) / 2);
-    const paddingX = Math.max(28, cardWidth * 0.08);
-    const paddingY = Math.max(22, Math.round(h * 0.035));
-    const radius = Math.min(32, cardHeight * 0.25);
-
-    const drawRoundRect = (x: number, y: number, width: number, height: number, r: number) => {
-      const rad = Math.min(r, width / 2, height / 2);
+      ctx.lineWidth = Math.max(4, symbolSize * 0.2);
       ctx.beginPath();
-      ctx.moveTo(x + rad, y);
-      ctx.lineTo(x + width - rad, y);
-      ctx.quadraticCurveTo(x + width, y, x + width, y + rad);
-      ctx.lineTo(x + width, y + height - rad);
-      ctx.quadraticCurveTo(x + width, y + height, x + width - rad, y + height);
-      ctx.lineTo(x + rad, y + height);
-      ctx.quadraticCurveTo(x, y + height, x, y + height - rad);
-      ctx.lineTo(x, y + rad);
-      ctx.quadraticCurveTo(x, y, x + rad, y);
-      ctx.closePath();
-    };
-
-    ctx.save();
-    drawRoundRect(cardX, cardY, cardWidth, cardHeight, radius);
-    const gradient = ctx.createLinearGradient(cardX, cardY, cardX, cardY + cardHeight);
-    gradient.addColorStop(0, 'rgba(12, 20, 32, 0.98)');
-    gradient.addColorStop(1, 'rgba(7, 11, 18, 0.92)');
-    ctx.fillStyle = gradient;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(121, 192, 255, 0.45)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.restore();
-
-    const centerX = w / 2;
-    let cursorY = cardY + paddingY;
-    const labelSize = Math.max(14, Math.round(h * 0.024));
-    const headlineSize = Math.max(30, Math.round(h * 0.066));
-    const summarySize = Math.max(18, Math.round(h * 0.032));
-    const detailSize = Math.max(15, Math.round(h * 0.028));
-
-    ctx.save();
-    ctx.font = `${labelSize}px Orbitron, sans-serif`;
-    ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(`Progressive Tier ${notice.tier}`, centerX, cursorY);
-    ctx.restore();
-    cursorY += labelSize + Math.max(6, h * 0.008);
-
-    ctx.save();
-    ctx.font = `${headlineSize}px Orbitron, sans-serif`;
-    ctx.fillStyle = '#79c0ff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-    ctx.shadowBlur = 14;
-    ctx.fillText(notice.headline, centerX, cursorY);
-    ctx.restore();
-    cursorY += headlineSize + Math.max(12, h * 0.014);
-
-    ctx.save();
-    ctx.font = `${summarySize}px Orbitron, sans-serif`;
-    ctx.fillStyle = '#cdd9e5';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(notice.summary, centerX, cursorY);
-    ctx.restore();
-    cursorY += summarySize + Math.max(8, h * 0.01);
-
-    if (notice.detail) {
-      ctx.save();
-      ctx.font = `${detailSize}px Orbitron, sans-serif`;
-      ctx.fillStyle = 'rgba(148, 163, 184, 0.92)';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      ctx.fillText(notice.detail, centerX, cursorY);
+      ctx.moveTo(arrowStartX + arrowWidth - symbolSize * 0.45, mappingCenterY - symbolSize * 0.35);
+      ctx.lineTo(arrowStartX + arrowWidth, mappingCenterY);
+      ctx.lineTo(arrowStartX + arrowWidth - symbolSize * 0.45, mappingCenterY + symbolSize * 0.35);
+      ctx.stroke();
       ctx.restore();
-      cursorY += detailSize;
     }
-
-    const pillY = cardY + cardHeight - paddingY - Math.max(32, h * 0.04);
-    const slotsLabel = notice.slots <= 0
-      ? 'Slots inactive'
-      : `${notice.slots} slot${notice.slots === 1 ? '' : 's'} active`;
-    const secondsLeft = Math.max(0, Math.ceil(this.mechanicLevelUpTimer));
-    const ctaBase = notice.cta ?? 'Press Enter to continue';
-    const ctaText = secondsLeft > 0 ? `${ctaBase} - ${secondsLeft}s` : ctaBase;
-
-    const drawPill = (
-      text: string,
-      x: number,
-      y: number,
-      options: { align: 'left' | 'right'; background: string; color: string }
-    ) => {
-      const padX = 18;
-      ctx.save();
-      ctx.font = `${Math.max(14, Math.round(h * 0.025))}px Orbitron, sans-serif`;
-      const width = ctx.measureText(text).width + padX * 2;
-      const height = Math.max(32, Math.round(h * 0.05));
-      const pillX = options.align === 'left' ? x : x - width;
-      const pillYPos = y;
-      const r = height / 2;
-      drawRoundRect(pillX, pillYPos, width, height, r);
-      ctx.fillStyle = options.background;
-      ctx.fill();
-      ctx.fillStyle = options.color;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(text, pillX + width / 2, pillYPos + height / 2 + 1);
-      ctx.restore();
-    };
-
-    drawPill(slotsLabel, cardX + paddingX, pillY, {
-      align: 'left',
-      background: 'rgba(40, 54, 74, 0.9)',
-      color: '#f5faff'
-    });
-    drawPill(ctaText, cardX + cardWidth - paddingX, pillY, {
-      align: 'right',
-      background: 'rgba(57, 88, 128, 0.95)',
-      color: '#d7ecff'
-    });
-  }
-
-  private drawTimeBar(ctx: CanvasRenderingContext2D, opacity = 1) {
+  }  private drawTimeBar(ctx: CanvasRenderingContext2D, opacity = 1) {
     const r = this.renderer;
     const pad = Math.round(Math.max(12, r.h * 0.03));
     const barH = Math.max(6, Math.round(r.h * 0.012));
