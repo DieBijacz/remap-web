@@ -1,3 +1,5 @@
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
 type Vec2 = { x: number; y: number };
 
 interface Particle {
@@ -18,6 +20,8 @@ interface Particle {
   baseAlpha: number;
   life: number;
   age: number;
+  chargeValue: number;
+  chargeColor: string | null;
 }
 
 export interface ParticleBurstOptions {
@@ -27,12 +31,23 @@ export interface ParticleBurstOptions {
   color: string;
   count: number;
   intensity: number;
+  chargeTotal?: number;
+  chargeColor?: string;
 }
+
+export interface ParticleAbsorbEvent {
+  energy: number;
+  color: string;
+}
+
+type ParticleAbsorbListener = (event: ParticleAbsorbEvent) => void;
 
 export class ParticleSystem {
   private particles: Particle[] = [];
   private readonly maxParticles = 450;
   private despawnEnabled = true;
+  private absorbThreshold = 0.75;
+  private absorbListener: ParticleAbsorbListener | null = null;
 
   clear() {
     this.particles = [];
@@ -50,12 +65,23 @@ export class ParticleSystem {
     }
   }
 
+  setAbsorbListener(listener: ParticleAbsorbListener | null) {
+    this.absorbListener = listener;
+  }
+
+  setAbsorbThreshold(value: number) {
+    this.absorbThreshold = clamp(value, 0.05, 0.99);
+  }
+
   spawnBurst(options: ParticleBurstOptions) {
     const { center, origin, ringRadius, color, count, intensity } = options;
     if (count <= 0) return;
 
     const baseAngle = Math.atan2(origin.y - center.y, origin.x - center.x);
     const cappedCount = Math.min(150, count);
+    const totalCharge = Math.max(0, options.chargeTotal ?? 0);
+    const chargePerParticle = cappedCount > 0 ? totalCharge / cappedCount : 0;
+    const chargeColor = options.chargeColor ?? color;
     for (let i = 0; i < cappedCount; i += 1) {
       const spread = (Math.random() - 0.5) * 0.9;
       const orbitSpeed = (0.7 + Math.random() * 0.8) * intensity;
@@ -82,7 +108,9 @@ export class ParticleSystem {
         alpha: baseAlpha,
         baseAlpha,
         life,
-        age: 0
+        age: 0,
+        chargeValue: chargePerParticle,
+        chargeColor
       });
     }
 
@@ -98,12 +126,22 @@ export class ParticleSystem {
 
       if (this.despawnEnabled) {
         p.age += dt;
+        const progress = p.age / life;
+        if (this.absorbListener && this.absorbThreshold > 0 && progress >= this.absorbThreshold && p.chargeValue > 0) {
+          const emittedColor = p.chargeColor ?? p.color;
+          this.absorbListener({
+            energy: p.chargeValue,
+            color: emittedColor
+          });
+          this.particles.splice(i, 1);
+          continue;
+        }
         if (p.age >= life) {
           this.particles.splice(i, 1);
           continue;
         }
 
-        const t = p.age / life;
+        const t = progress;
         const fade = 1 - t;
         const easeFactor = Math.min(1, dt * p.radialEase);
         p.radius += (p.targetRadius - p.radius) * easeFactor;

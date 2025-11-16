@@ -8,14 +8,21 @@ import type { InputHandler } from '../input/InputManager';
 import type { Action } from '../input/Keymap';
 import { InputManager } from '../input/InputManager';
 import { EffectsManager } from '../fx/EffectsManager';
-import { ParticleSystem } from '../fx/ParticleSystem';
+import { ParticleSystem, type ParticleAbsorbEvent } from '../fx/ParticleSystem';
 import { AudioSystem } from '../audio/AudioSystem';
 import correctSfxUrl from '../audio/sfx/sfx_point.wav';
 import wrongSfxUrl from '../audio/sfx/sfx_wrong.wav';
 import HighscoreStore, { type HighscoreEntry } from '../storage/HighscoreStore';
 import ConfigStore from '../storage/ConfigStore';
 import type { Config as PersistentConfig } from '../storage/ConfigStore';
-import { DEFAULT_SYMBOL_COLORS, cloneColor, sanitizeSymbolColors, type RGBColor } from '../config/colorPresets';
+import {
+  DEFAULT_SYMBOL_COLORS,
+  cloneColor,
+  rgbToCss,
+  rgbToHex,
+  sanitizeSymbolColors,
+  type RGBColor
+} from '../config/colorPresets';
 
 const BASE_RING_SYMBOL_SCALE = 1.22;
 const BASE_CENTER_SCALE = 1.85;
@@ -46,6 +53,11 @@ const INTRO_CENTER_DELAY_EXTRA = 0.2;
 const INTRO_CENTER_DURATION = 0.7;
 const INTRO_HUD_DELAY_OFFSET = 0.18;
 const INTRO_HUD_FADE_DURATION = 0.35;
+const BONUS_ACTIVE_DURATION = 6;
+const BONUS_COOLDOWN_DURATION = 1.2;
+const BONUS_SCORE_MULTIPLIER = 2;
+const BONUS_ROTATION_BASE = 0.25;
+const BONUS_ROTATION_EXTRA = 2.6;
 type Direction = 'up' | 'right' | 'down' | 'left';
 type MechanicType =
   | 'none'
@@ -56,6 +68,7 @@ type MechanicType =
   | 'match-shape';
 type MatchMechanicMode = 'match-color' | 'match-shape';
 type NameEntryMode = 'slots' | 'keyboard';
+type BonusRingState = 'idle' | 'charging' | 'ready' | 'active' | 'cooldown';
 export type GameCompletionSummary = {
   leaderboard: HighscoreEntry[];
   finalScore: number;
@@ -74,6 +87,7 @@ const MECHANIC_COLORS: Record<MechanicType, string> = {
   'match-color': '#f472b6',
   'match-shape': '#22d3ee'
 };
+const isToggleMechanic = (type: MechanicType): type is Exclude<MechanicType, 'none'> => type !== 'none';
 const NAME_SLOT_COUNT = 10;
 const NAME_ALPHABET = [
   ' ',
@@ -95,18 +109,6 @@ const NAME_KEYBOARD_SPECIAL = {
   OK: 'OK'
 } as const;
 const LEADERBOARD_MAX_ENTRIES = 10;
-
-type RingSegment = { start: number; end: number; };
-interface RingStyle {
-  radiusScale: number;
-  thickness: number;
-  segments: RingSegment[];
-  rotationScale?: number;
-  rotationOffset?: number;
-  color?: string;
-  glow?: number;
-  opacity?: number;
-}
 
 type ScoreTracer = {
   start: { x: number; y: number };
@@ -225,79 +227,6 @@ const colorWithAlpha = (hex: string, alpha: number, brighten = 0) => {
   const gg = Math.round(g + (255 - g) * mix);
   const bb = Math.round(b + (255 - b) * mix);
   return `rgba(${rr}, ${gg}, ${bb}, ${alpha})`;
-};
-
-const makeSegments = (...ranges: Array<[number, number]>) =>
-  ranges.map(([start, end]) => ({ start, end }));
-
-const MECHANIC_RING_STYLES: Record<MechanicType, RingStyle[]> = {
-  none: [],
-  remap: [
-    {
-      radiusScale: 1.02,
-      thickness: 4.6,
-      glow: 18,
-      segments: makeSegments([0.02, 0.26], [0.52, 0.76])
-    }
-  ],
-  memory: [
-    {
-      radiusScale: 0.94,
-      thickness: 3.5,
-      glow: 16,
-      segments: makeSegments([0.08, 0.86])
-    }
-  ],
-  joystick: [
-    {
-      radiusScale: 1.18,
-      thickness: 3.2,
-      glow: 12,
-      segments: makeSegments(
-        [0.11, 0.2],
-        [0.38, 0.47],
-        [0.64, 0.73],
-        [0.91, 1.0]
-      )
-    }
-  ],
-  'match-color': [
-    {
-      radiusScale: 1.06,
-      thickness: 4.3,
-      glow: 22,
-      rotationScale: 1.15,
-      color: '#f472b6',
-      segments: makeSegments([0.0, 0.18], [0.42, 0.6], [0.84, 1.0])
-    },
-    {
-      radiusScale: 1.06,
-      thickness: 3.8,
-      glow: 18,
-      rotationScale: 1.15,
-      color: '#c084fc',
-      segments: makeSegments([0.18, 0.42], [0.6, 0.84])
-    }
-  ],
-  'match-shape': [
-    {
-      radiusScale: 0.98,
-      thickness: 4.1,
-      glow: 18,
-      color: '#22d3ee',
-      rotationScale: 0.85,
-      segments: makeSegments([0.0, 0.16], [0.34, 0.5], [0.68, 0.84])
-    }
-  ]
-};
-
-const MECHANIC_RING_SPEED: Record<MechanicType, number> = {
-  none: 0,
-  remap: 0.4,
-  memory: 0.32,
-  joystick: 0.6,
-  'match-color': 0.55,
-  'match-shape': 0.4
 };
 
 const colorsEqual = (a?: RGBColor | null, b?: RGBColor | null) =>
@@ -439,17 +368,17 @@ export class Game implements InputHandler {
   private joystickInverted = false;
   private ringRotationOffset = 0;
   private spinState: SpinState | null = null;
-  private spinState: SpinState | null = null;
   private resolvingAnswer = false;
   private pendingRingLayout: RingLayoutPlan | null = null;
   private lastMechanicSet: MechanicType[] = [];
   private particlesEnabled = true;
   private particlesPersist = false;
+  private particleDensity = 4;
   private scoreTracerEnabled = true;
   private scoreTracerCountSetting = SCORE_TRACER_COUNT;
   private scoreTracerThickness = 1;
   private scoreTracerIntensity = 1;
-  private mechanicEnabled: Record<'remap' | 'memory' | 'joystick' | 'match-color' | 'match-shape', boolean> = {
+  private mechanicEnabled: Record<Exclude<MechanicType, 'none'>, boolean> = {
     remap: true,
     memory: true,
     joystick: true,
@@ -459,14 +388,15 @@ export class Game implements InputHandler {
   private scorePulseColor = '#79c0ff';
   private scorePulseTimer = 0;
   private scoreTracers: ScoreTracer[] = [];
-  private mechanicRingAngles: Record<MechanicType, number> = {
-    none: 0,
-    remap: 0,
-    memory: 0,
-    joystick: 0,
-    'match-color': 0,
-    'match-shape': 0
-  };
+  private bonusRingState: BonusRingState = 'idle';
+  private bonusRingCharge = 0;
+  private bonusRingChargeTarget = 0;
+  private bonusRingRotation = 0;
+  private bonusRingActiveTimer = 0;
+  private bonusRingCooldownTimer = 0;
+  private bonusRingColor: RGBColor = cloneColor(DEFAULT_SYMBOL_COLORS[0]);
+  private bonusRingColorWeight = 0;
+  private bonusScoreMultiplier = 1;
   private leaderboard: HighscoreEntry[] = [];
   private gamePhase: 'idle' | 'attract' | 'playing' | 'name-entry' | 'completed' = 'idle';
   private nameEntryMode: NameEntryMode = 'slots';
@@ -488,6 +418,8 @@ export class Game implements InputHandler {
     this.input = new InputManager();
     this.effects = new EffectsManager();
     this.audio = new AudioSystem();
+    this.particles.setAbsorbListener((event) => this.handleParticleAbsorb(event));
+    this.particles.setAbsorbThreshold(0.78);
     this.config = { ...this.defaults };
     if (typeof window !== 'undefined' && 'localStorage' in window) {
       this.highscoreStore = new HighscoreStore();
@@ -742,17 +674,87 @@ export class Game implements InputHandler {
     }
   }
 
-  private getActiveMechanics(): MechanicType[] {
-    return [...this.activeMechanics];
+  private updateBonusRing(dt: number) {
+    const state = this.bonusRingState;
+    const target = clamp(this.bonusRingChargeTarget, 0, 1);
+    const chargeDelta = target - this.bonusRingCharge;
+    if (Math.abs(chargeDelta) > 0.0001) {
+      const smoothing = state === 'active' ? 10 : 6;
+      const factor = Math.min(1, dt * smoothing);
+      this.bonusRingCharge += chargeDelta * factor;
+    } else {
+      this.bonusRingCharge = target;
+    }
+
+    const effectiveCharge = state === 'active' ? 1 : Math.max(this.bonusRingCharge, target);
+    let rotationSpeed = BONUS_ROTATION_BASE + BONUS_ROTATION_EXTRA * effectiveCharge;
+    if (state === 'ready') {
+      rotationSpeed += 0.7;
+    } else if (state === 'active') {
+      rotationSpeed += 1.2;
+    }
+    this.bonusRingRotation = (this.bonusRingRotation + rotationSpeed * dt) % TAU;
+
+    if ((state === 'charging' || state === 'ready') && target >= 0.995) {
+      this.bonusRingState = 'ready';
+    } else if (state === 'ready' && target < 0.9) {
+      this.bonusRingState = target <= 0 ? 'idle' : 'charging';
+    } else if (state === 'charging' && target <= 0.001) {
+      this.bonusRingState = 'idle';
+    }
+
+    if (state === 'active') {
+      if (this.bonusRingActiveTimer > 0) {
+        this.bonusRingActiveTimer = Math.max(0, this.bonusRingActiveTimer - dt);
+        const drainRate = dt / Math.max(0.001, BONUS_ACTIVE_DURATION);
+        this.bonusRingChargeTarget = clamp(this.bonusRingChargeTarget - drainRate, 0, 1);
+      }
+      if (this.bonusRingActiveTimer <= 0) {
+        this.endBonusRing();
+      }
+    } else if (state === 'cooldown') {
+      if (this.bonusRingCooldownTimer > 0) {
+        this.bonusRingCooldownTimer = Math.max(0, this.bonusRingCooldownTimer - dt);
+      }
+      if (this.bonusRingCooldownTimer <= 0) {
+        this.resetBonusRing();
+      }
+    }
   }
 
-  private updateMechanicRings(dt: number) {
-    const active = this.getActiveMechanics();
-    active.forEach((type) => {
-      const speed = MECHANIC_RING_SPEED[type] ?? 0;
-      if (speed === 0) return;
-      this.mechanicRingAngles[type] = ((this.mechanicRingAngles[type] ?? 0) + speed * dt) % TAU;
-    });
+  private tryActivateBonusRing(): boolean {
+    if (this.gamePhase !== 'playing') {
+      return false;
+    }
+    if (this.bonusRingState !== 'ready') {
+      return false;
+    }
+    this.activateBonusRing();
+    return true;
+  }
+
+  private activateBonusRing() {
+    if (this.bonusRingState !== 'ready') {
+      return;
+    }
+    this.bonusRingState = 'active';
+    this.bonusRingActiveTimer = BONUS_ACTIVE_DURATION;
+    this.bonusRingCharge = 1;
+    this.bonusRingChargeTarget = 1;
+    this.bonusScoreMultiplier = BONUS_SCORE_MULTIPLIER;
+    const flashColor = rgbToCss(this.bonusRingColor, 0.4);
+    this.effects.flash(flashColor, 0.25, 0.35);
+  }
+
+  private endBonusRing() {
+    if (this.bonusRingState !== 'active') {
+      return;
+    }
+    this.bonusRingState = 'cooldown';
+    this.bonusRingActiveTimer = 0;
+    this.bonusRingCooldownTimer = BONUS_COOLDOWN_DURATION;
+    this.bonusRingChargeTarget = 0;
+    this.bonusScoreMultiplier = 1;
   }
 
   private rollRemapMapping() {
@@ -978,7 +980,7 @@ export class Game implements InputHandler {
   }
 
   private mapInputDirection(dir: Direction): Direction {
-    if (!this.activeMechanics.includes('joystick')) {
+    if (!this.activeMechanics.includes('joystick') || !this.joystickInverted) {
       return dir;
     }
     switch (dir) {
@@ -1134,7 +1136,11 @@ export class Game implements InputHandler {
   }
 
   private setActiveMechanics(next: MechanicType[]) {
-    let unique = Array.from(new Set(next.filter((type) => this.mechanicEnabled[type])));
+    let unique = Array.from(
+      new Set(
+        next.filter((type): type is Exclude<MechanicType, 'none'> => isToggleMechanic(type) && this.mechanicEnabled[type])
+      )
+    );
     const matchMechanics: MatchMechanicMode[] = ['match-color', 'match-shape'];
     const activeMatch = unique.find((type): type is MatchMechanicMode =>
       matchMechanics.includes(type as MatchMechanicMode)
@@ -1142,8 +1148,9 @@ export class Game implements InputHandler {
     if (activeMatch) {
       unique = [activeMatch];
     }
-    const removed = this.activeMechanics.filter((type) => !unique.includes(type));
-    const added = unique.filter((type) => !this.activeMechanics.includes(type));
+    const currentActive = this.activeMechanics.filter(isToggleMechanic);
+    const removed = currentActive.filter((type) => !unique.includes(type));
+    const added = unique.filter((type) => !currentActive.includes(type));
 
     removed.forEach((type) => this.deactivateMechanic(type));
     added.forEach((type) => this.activateMechanic(type));
@@ -1402,6 +1409,7 @@ export class Game implements InputHandler {
     this.introTransition = null;
     this.time.set(0);
     this.timer.set(this.config.duration);
+    this.resetBonusRing();
     this.clock.stop();
     this.clock.start((dt) => this.update(dt));
   }
@@ -1606,7 +1614,7 @@ export class Game implements InputHandler {
     );
     this.mechanicEnabled = nextMechanicEnabled;
     if (mechanicsChanged) {
-      const filtered = this.activeMechanics.filter((type) => this.mechanicEnabled[type]);
+      const filtered = this.activeMechanics.filter((type): type is Exclude<MechanicType, 'none'> => isToggleMechanic(type) && this.mechanicEnabled[type]);
       if (filtered.length !== this.activeMechanics.length) {
         this.setActiveMechanics(filtered);
       }
@@ -1659,48 +1667,60 @@ export class Game implements InputHandler {
     void ctx;
   }
 
-  private drawMechanicRings(ctx: CanvasRenderingContext2D) {
-    const active = this.getActiveMechanics();
-    if (active.length === 0) {
+  private drawBonusRing(ctx: CanvasRenderingContext2D) {
+    const strength = clamp(this.bonusRingCharge, 0, 1);
+    const state = this.bonusRingState;
+    if (state === 'idle' && strength <= 0.001) {
       return;
     }
     const center = this.playfieldCenter.x || this.playfieldCenter.y
       ? this.playfieldCenter
       : this.getCanvasCenter();
-    const baseRadius = this.getRingRadius();
-    active.forEach((type) => {
-      const styles = MECHANIC_RING_STYLES[type] ?? [];
-      if (styles.length === 0) return;
-      const baseAngle = this.mechanicRingAngles[type] ?? 0;
-      styles.forEach((style) => {
-        const radius = baseRadius * style.radiusScale;
-        const angle = baseAngle * (style.rotationScale ?? 1) + (style.rotationOffset ?? 0);
-        const mechanicColor = style.color ?? MECHANIC_COLORS[type];
-        const brighten = type === 'memory' && this.memorySymbolsHidden ? 0.35 : 0;
-        ctx.save();
-        ctx.translate(center.x, center.y);
-        ctx.lineWidth = style.thickness;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.globalAlpha = style.opacity ?? 0.95;
-        ctx.strokeStyle = colorWithAlpha(mechanicColor, 0.88, brighten);
-        ctx.shadowColor = colorWithAlpha(mechanicColor, 0.6, brighten);
-        ctx.shadowBlur = style.glow ?? 10;
-        style.segments.forEach((segment) => {
-          ctx.beginPath();
-          ctx.arc(
-            0,
-            0,
-            radius,
-            angle + segment.start * TAU,
-            angle + segment.end * TAU,
-            false
-          );
-          ctx.stroke();
-        });
-        ctx.restore();
-      });
-    });
+    const radiusBase = this.getRingRadius();
+    const radius = radiusBase * (1.02 + strength * 0.2 + (state === 'active' ? 0.05 : 0));
+    const thickness = 4 + strength * 20 + (state === 'active' ? 10 : 0);
+    const glow = 12 + strength * 28 + (state === 'active' ? 16 : 0);
+    const baseHex = rgbToHex(this.bonusRingColor);
+    const brightness = state === 'active' ? 0.45 : strength * 0.25;
+    const opacity = state === 'active' ? 1 : 0.85;
+    const segmentCount = Math.max(3, state === 'active' ? 8 : 4 + Math.round(strength * 4));
+    const litSegments = state === 'active' ? segmentCount : strength * segmentCount;
+
+    ctx.save();
+    ctx.translate(center.x, center.y);
+
+    ctx.strokeStyle = colorWithAlpha(baseHex, 0.25, 0.05 + strength * 0.1);
+    ctx.lineWidth = Math.max(2, thickness * 0.45);
+    ctx.shadowColor = colorWithAlpha(baseHex, 0.18, 0);
+    ctx.shadowBlur = glow * 0.4;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, TAU);
+    ctx.stroke();
+
+    if (litSegments > 0) {
+      const sweep = TAU / segmentCount;
+      ctx.rotate(this.bonusRingRotation);
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = colorWithAlpha(baseHex, opacity, brightness);
+      ctx.lineWidth = thickness;
+      ctx.shadowColor = colorWithAlpha(baseHex, Math.min(1, 0.7 + strength * 0.4), brightness + 0.15);
+      ctx.shadowBlur = glow;
+      const globalAlpha = state === 'cooldown'
+        ? Math.max(0, this.bonusRingCooldownTimer / BONUS_COOLDOWN_DURATION)
+        : 1;
+      ctx.globalAlpha = globalAlpha;
+      for (let i = 0; i < segmentCount; i += 1) {
+        const fill = state === 'active' ? 1 : clamp(litSegments - i, 0, 1);
+        if (fill <= 0) break;
+        const start = i * sweep;
+        const end = start + sweep * fill * 0.88;
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, start, end);
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
   }
 
   private recordPromptSpawn() {
@@ -1799,6 +1819,13 @@ export class Game implements InputHandler {
       e.preventDefault();
       return;
     }
+    if (e.key === 'Enter') {
+      const activated = this.tryActivateBonusRing();
+      if (activated) {
+        e.preventDefault();
+        return;
+      }
+    }
     if (this.anim.isActive()) return; // ignore input during animations
 
     console.log('[debug] Game.onKeyDown', e.key);
@@ -1894,7 +1921,9 @@ export class Game implements InputHandler {
   private handleCorrectSelection(ringSymbol: Symbol) {
     this.resolvingAnswer = true;
     try {
-      this.score += 100;
+      const baseScore = 100;
+      const scoreGain = Math.round(baseScore * this.bonusScoreMultiplier);
+      this.score += scoreGain;
       const bonus = this.computeTimeBonus();
       if (bonus !== 0) {
         this.timer.add(bonus);
@@ -1966,14 +1995,74 @@ export class Game implements InputHandler {
 
     const brighten = Math.min(0.45, (this.streak - 1) * 0.025);
     const color = colorWithAlpha(palette.glow, 0.85, brighten);
+    const chargeTotal = this.computeBonusCharge(count, intensity);
     this.particles.spawnBurst({
       center,
       origin: { x: ringSymbol.x, y: ringSymbol.y },
       ringRadius,
       color,
       count,
-      intensity
+      intensity,
+      chargeTotal,
+      chargeColor: palette.glow
     });
+  }
+
+  private computeBonusCharge(count: number, intensity: number) {
+    if (count <= 0) return 0;
+    const normalized = (count * Math.max(1, intensity)) / 150;
+    const streakBonus = Math.min(this.streak, 50) * 0.002;
+    return clamp(normalized + streakBonus, 0.015, 0.55);
+  }
+
+  private handleParticleAbsorb(event: ParticleAbsorbEvent) {
+    if (this.gamePhase !== 'playing') return;
+    if (this.bonusRingState === 'active' || this.bonusRingState === 'cooldown') {
+      return;
+    }
+    const amount = clamp(event.energy, 0, 1);
+    if (amount <= 0) return;
+    const next = clamp(this.bonusRingChargeTarget + amount, 0, 1);
+    this.bonusRingChargeTarget = next;
+    const rgb = hexToRgb(event.color);
+    if (rgb) {
+      this.mixBonusRingColor(rgb, amount);
+    }
+    if (this.bonusRingState === 'idle') {
+      this.bonusRingState = 'charging';
+    }
+    if (next >= 0.995) {
+      this.bonusRingState = 'ready';
+    }
+  }
+
+  private mixBonusRingColor(color: RGBColor, weight: number) {
+    const w = Math.max(0, weight);
+    if (w <= 0) return;
+    const totalWeight = this.bonusRingColorWeight + w;
+    const safeTotal = Math.max(0.0001, totalWeight);
+    this.bonusRingColor = {
+      r: Math.round((this.bonusRingColor.r * this.bonusRingColorWeight + color.r * w) / safeTotal),
+      g: Math.round((this.bonusRingColor.g * this.bonusRingColorWeight + color.g * w) / safeTotal),
+      b: Math.round((this.bonusRingColor.b * this.bonusRingColorWeight + color.b * w) / safeTotal)
+    };
+    this.bonusRingColorWeight = Math.min(10, safeTotal);
+  }
+
+  private resetBonusRingColor() {
+    this.bonusRingColor = cloneColor(DEFAULT_SYMBOL_COLORS[0]);
+    this.bonusRingColorWeight = 0;
+  }
+
+  private resetBonusRing() {
+    this.bonusRingState = 'idle';
+    this.bonusRingCharge = 0;
+    this.bonusRingChargeTarget = 0;
+    this.bonusRingRotation = 0;
+    this.bonusRingActiveTimer = 0;
+    this.bonusRingCooldownTimer = 0;
+    this.bonusScoreMultiplier = 1;
+    this.resetBonusRingColor();
   }
 
   private triggerScoreCelebration(ringSymbol: Symbol) {
@@ -2563,10 +2652,7 @@ export class Game implements InputHandler {
     this.joystickInverted = false;
     this.ringRotationOffset = 0;
     this.spinState = null;
-    this.lastRandomMechanic = 'none';
-    (Object.keys(this.mechanicRingAngles) as MechanicType[]).forEach((key) => {
-      this.mechanicRingAngles[key] = 0;
-    });
+    this.resetBonusRing();
     this.syncHighscore();
     this.timer.set(this.config.duration);
     this.initSymbols();
@@ -2644,7 +2730,7 @@ export class Game implements InputHandler {
       }
     }
 
-    this.updateMechanicRings(dt);
+    this.updateBonusRing(dt);
     this.updateSpinAnimation(dt);
 
     const timeLeftFloat = this.timer.get();
@@ -2674,6 +2760,7 @@ export class Game implements InputHandler {
     this.pendingPlacement = null;
     this.audio.play('gameover');
     this.mechanicBannerText = null;
+    this.resetBonusRing();
 
     const placement = this.highscoreStore
       ? this.highscoreStore.placementForScore(this.finalScore)
@@ -2868,7 +2955,7 @@ export class Game implements InputHandler {
     }
     this.drawRingBackdrop(ctx);
     this.drawAmbientSymbols(ctx);
-    this.drawMechanicRings(ctx);
+    this.drawBonusRing(ctx);
 
     const hideRing = this.activeMechanics.includes('memory') && this.memorySymbolsHidden;
     const spinState = this.spinState && this.spinState.active ? this.spinState : null;
@@ -2944,6 +3031,9 @@ export class Game implements InputHandler {
     const hudOpacity = intro ? intro.hudAlpha : 1;
     const hudMetrics = this.drawScoreboard(ctx, hudOpacity);
     const hudVisible = hudOpacity > 0.001;
+    if (hudVisible) {
+      this.drawBonusPrompt(ctx, hudMetrics, hudOpacity);
+    }
     if (!this.mechanicLevelUpNotice && this.gamePhase === 'playing' && hudVisible) {
       this.drawMechanicBanner(ctx, hudMetrics);
     }
@@ -3042,6 +3132,29 @@ export class Game implements InputHandler {
     ctx.restore();
 
     return metrics;
+  }
+
+  private drawBonusPrompt(ctx: CanvasRenderingContext2D, metrics: HudMetrics, opacity: number) {
+    const state = this.bonusRingState;
+    if (state === 'idle' || state === 'charging') {
+      return;
+    }
+    const prompt = state === 'ready'
+      ? 'Bonus ready - press Enter'
+      : `Bonus x${this.bonusScoreMultiplier.toFixed(1)} active`;
+    const color = state === 'ready' ? '#e0f2ff' : '#ffd166';
+    const alpha = Math.max(0, Math.min(1, opacity));
+    ctx.save();
+    ctx.globalAlpha *= alpha;
+    ctx.font = `${Math.max(12, Math.round(metrics.labelFontSize * 1.1))}px Orbitron, sans-serif`;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
+    ctx.shadowBlur = 6;
+    const y = metrics.scoreStripBottom + Math.max(6, Math.round(metrics.hudPad * 0.25));
+    ctx.fillText(prompt, this.renderer.w / 2, y);
+    ctx.restore();
   }
 
   private drawMechanicBanner(ctx: CanvasRenderingContext2D, metrics: HudMetrics) {
