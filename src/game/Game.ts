@@ -368,6 +368,7 @@ export class Game implements InputHandler {
   private mechanicLevelUpTimer = 0;
   private mechanicLevelPauseActive = false;
   private remapMapping: { from: SymbolType; to: SymbolType } | null = null;
+  private pendingRemapMapping: { from: SymbolType; to: SymbolType } | null = null;
   private memoryRevealTimer = 0;
   private memorySymbolsHidden = false;
   private memoryPreviewDuration = MEMORY_PREVIEW_DURATION;
@@ -825,6 +826,7 @@ export class Game implements InputHandler {
     const uniqueAvailable = Array.from(new Set(availableSet));
     if (uniqueAvailable.length < 2) {
       this.remapMapping = null;
+      this.pendingRemapMapping = null;
       this.mechanicBannerText = 'Remap Pause';
       return;
     }
@@ -843,8 +845,12 @@ export class Game implements InputHandler {
       }
     }
 
-    this.remapMapping = { from, to };
-    this.mechanicBannerText = null;
+    const mapping = { from, to };
+    if (this.resolvingAnswer || this.anim.isActive()) {
+      this.pendingRemapMapping = mapping;
+    } else {
+      this.applyRemapMapping(mapping);
+    }
   }
 
   private getExpectedSymbolType(): SymbolType {
@@ -854,6 +860,22 @@ export class Game implements InputHandler {
       }
     }
     return this.centerSymbol;
+  }
+
+  private applyRemapMapping(mapping: { from: SymbolType; to: SymbolType }) {
+    this.remapMapping = { ...mapping };
+    this.pendingRemapMapping = null;
+    this.mechanicBannerText = null;
+  }
+
+  private flushPendingRemapMapping() {
+    if (!this.pendingRemapMapping) {
+      return;
+    }
+    if (this.resolvingAnswer || this.anim.isActive()) {
+      return;
+    }
+    this.applyRemapMapping(this.pendingRemapMapping);
   }
 
   private getMatchMechanicMode(): MatchMechanicMode | null {
@@ -1157,6 +1179,7 @@ export class Game implements InputHandler {
     switch (type) {
       case 'remap':
         this.remapMapping = null;
+        this.pendingRemapMapping = null;
         break;
       case 'memory':
         this.memorySymbolsHidden = false;
@@ -1850,6 +1873,7 @@ export class Game implements InputHandler {
               this.centerScale = this.centerBaseScale;
             this.centerOpacity = 1;
             this.recordPromptSpawn();
+            this.flushPendingRemapMapping();
           }
         });
       }
@@ -3312,7 +3336,7 @@ export class Game implements InputHandler {
     const tokens = bannerTextRaw
       ? bannerTextRaw.split('|').map((token) => token.trim()).filter(Boolean)
       : [];
-    const bannerText = tokens.length > 0 ? tokens.join(' • ') : bannerTextRaw;
+    const bannerText = tokens.length > 0 ? tokens.join(' \u2022 ') : bannerTextRaw;
 
     const accentMechanic = showRemapMapping
       ? 'remap'
@@ -3331,7 +3355,10 @@ export class Game implements InputHandler {
 
     const mappingWidth = showRemapMapping ? Math.max(110, bannerHeight * 2.6) : 0;
     const mappingSpacing = showRemapMapping ? Math.max(18, bannerHeight * 0.4) : 0;
-    const textWidth = bannerWidth - mappingWidth - mappingSpacing - Math.max(16, bannerPadding);
+    const textPadding = Math.max(16, bannerPadding * 0.8);
+    const textAreaWidth = bannerWidth - (showRemapMapping ? mappingWidth + mappingSpacing : 0);
+    const availableTextWidth = Math.max(0, textAreaWidth - textPadding * 2);
+    const textMessage = !showRemapMapping ? (bannerText || 'Mechanics Ready') : '';
 
     const drawRoundedRect = (x: number, y: number, width: number, height: number, radius: number) => {
       const rad = Math.min(radius, height / 2, width / 2);
@@ -3360,25 +3387,26 @@ export class Game implements InputHandler {
     ctx.stroke();
     ctx.restore();
 
-    ctx.save();
-    ctx.font = Math.max(14, Math.round(bannerHeight * 0.48)) + 'px Orbitron, sans-serif';
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#f5faff';
-    ctx.shadowColor = colorWithAlpha(accentColor, 0.4, 0.2);
-    ctx.shadowBlur = 8;
-    const textX = bannerLeft + Math.max(16, bannerPadding * 0.8);
-    const textY = bannerTop + bannerHeight / 2;
-    const textToRender = bannerText || (showRemapMapping ? 'Remap Active' : 'Mechanics Ready');
-    let displayText = textToRender;
-    if (ctx.measureText(displayText).width > textWidth) {
-      while (displayText.length > 1 && ctx.measureText(displayText + '…').width > textWidth) {
-        displayText = displayText.slice(0, -1);
+    if (textMessage && availableTextWidth > 0) {
+      ctx.save();
+      ctx.font = `${Math.max(14, Math.round(bannerHeight * 0.48))}px Orbitron, sans-serif`;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#f5faff';
+      ctx.shadowColor = colorWithAlpha(accentColor, 0.35, 0.2);
+      ctx.shadowBlur = 8;
+      const textX = bannerLeft + textAreaWidth / 2;
+      const textY = bannerTop + bannerHeight / 2;
+      let displayText = textMessage;
+      if (ctx.measureText(displayText).width > availableTextWidth) {
+        while (displayText.length > 1 && ctx.measureText(displayText + '\u2026').width > availableTextWidth) {
+          displayText = displayText.slice(0, -1);
+        }
+        displayText = displayText + '\u2026';
       }
-      displayText = displayText + '…';
+      ctx.fillText(displayText, textX, textY);
+      ctx.restore();
     }
-    ctx.fillText(displayText, textX, textY);
-    ctx.restore();
 
     if (showRemapMapping && this.remapMapping) {
       const scaleFactor = clamp(this.renderer.h * 0.0009, 0.45, 0.7);
@@ -3423,7 +3451,17 @@ export class Game implements InputHandler {
       ctx.stroke();
       ctx.restore();
     }
-  }  private drawTimeBar(ctx: CanvasRenderingContext2D, opacity = 1) {
+  }
+
+  private drawNameEntryPanel(ctx: CanvasRenderingContext2D) {
+    void ctx;
+  }
+
+  private drawMechanicLevelAnnouncement(ctx: CanvasRenderingContext2D) {
+    void ctx;
+  }
+
+  private drawTimeBar(ctx: CanvasRenderingContext2D, opacity = 1) {
     const r = this.renderer;
     const pad = Math.round(Math.max(12, r.h * 0.03));
     const barH = Math.max(6, Math.round(r.h * 0.012));
