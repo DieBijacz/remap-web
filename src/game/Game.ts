@@ -394,6 +394,7 @@ export class Game implements InputHandler {
   private bonusRingRotation = 0;
   private bonusRingActiveTimer = 0;
   private bonusRingCooldownTimer = 0;
+  private bonusChargePoints = 0;
   private bonusRingColor: RGBColor = cloneColor(DEFAULT_SYMBOL_COLORS[0]);
   private bonusRingColorWeight = 0;
   private bonusScoreMultiplier = 1;
@@ -722,6 +723,58 @@ export class Game implements InputHandler {
     }
   }
 
+  private getBonusChargeThreshold(): number {
+    switch (this.difficulty) {
+      case 'easy':
+        return 10;
+      case 'hard':
+        return 30;
+      case 'progressive':
+        return 20;
+      case 'medium':
+      default:
+        return 20;
+    }
+  }
+
+  private getBonusPenaltyAmount(): number {
+    switch (this.difficulty) {
+      case 'easy':
+        return 5;
+      case 'medium':
+      case 'progressive':
+        return 10;
+      case 'hard':
+      default:
+        return Number.POSITIVE_INFINITY;
+    }
+  }
+
+  private syncBonusChargeTarget() {
+    const threshold = this.getBonusChargeThreshold();
+    if (threshold <= 0) {
+      this.bonusRingChargeTarget = 0;
+      return;
+    }
+    const ratio = clamp(this.bonusChargePoints / threshold, 0, 1);
+    this.bonusRingChargeTarget = ratio;
+  }
+
+  private addBonusChargeProgress(amount = 1) {
+    const threshold = this.getBonusChargeThreshold();
+    if (threshold <= 0 || amount <= 0) {
+      return;
+    }
+    if (this.bonusRingState === 'active' || this.bonusRingState === 'cooldown') {
+      return;
+    }
+    this.bonusChargePoints = Math.min(threshold, this.bonusChargePoints + amount);
+    if (this.bonusChargePoints > 0 && this.bonusRingState === 'idle') {
+      this.bonusRingState = 'charging';
+    }
+    this.syncBonusChargeTarget();
+  }
+
   private tryActivateBonusRing(): boolean {
     if (this.gamePhase !== 'playing') {
       return false;
@@ -741,6 +794,7 @@ export class Game implements InputHandler {
     this.bonusRingActiveTimer = BONUS_ACTIVE_DURATION;
     this.bonusRingCharge = 1;
     this.bonusRingChargeTarget = 1;
+    this.bonusChargePoints = this.getBonusChargeThreshold();
     this.bonusScoreMultiplier = BONUS_SCORE_MULTIPLIER;
     const flashColor = rgbToCss(this.bonusRingColor, 0.4);
     this.effects.flash(flashColor, 0.25, 0.35);
@@ -754,7 +808,10 @@ export class Game implements InputHandler {
     this.bonusRingActiveTimer = 0;
     this.bonusRingCooldownTimer = BONUS_COOLDOWN_DURATION;
     this.bonusRingChargeTarget = 0;
+    this.bonusChargePoints = 0;
     this.bonusScoreMultiplier = 1;
+    this.syncBonusChargeTarget();
+    this.resetBonusRingColor();
   }
 
   private rollRemapMapping() {
@@ -1540,6 +1597,14 @@ export class Game implements InputHandler {
       this.progressiveMechanicLimit = 0;
       this.clearProgressiveLevelAnnouncement();
     }
+    if (difficultyChanged) {
+      const threshold = this.getBonusChargeThreshold();
+      this.bonusChargePoints = Math.min(this.bonusChargePoints, threshold);
+      if (this.bonusRingState !== 'active' && this.bonusRingState !== 'cooldown') {
+        this.bonusRingState = this.bonusChargePoints > 0 ? 'charging' : 'idle';
+      }
+      this.syncBonusChargeTarget();
+    }
     this.mechanicSlots =
       this.difficulty === 'easy'
         ? 1
@@ -1668,58 +1733,46 @@ export class Game implements InputHandler {
   }
 
   private drawBonusRing(ctx: CanvasRenderingContext2D) {
-    const strength = clamp(this.bonusRingCharge, 0, 1);
-    const state = this.bonusRingState;
-    if (state === 'idle' && strength <= 0.001) {
-      return;
-    }
     const center = this.playfieldCenter.x || this.playfieldCenter.y
       ? this.playfieldCenter
       : this.getCanvasCenter();
-    const radiusBase = this.getRingRadius();
-    const radius = radiusBase * (1.02 + strength * 0.2 + (state === 'active' ? 0.05 : 0));
-    const thickness = 4 + strength * 20 + (state === 'active' ? 10 : 0);
-    const glow = 12 + strength * 28 + (state === 'active' ? 16 : 0);
-    const baseHex = rgbToHex(this.bonusRingColor);
-    const brightness = state === 'active' ? 0.45 : strength * 0.25;
-    const opacity = state === 'active' ? 1 : 0.85;
-    const segmentCount = Math.max(3, state === 'active' ? 8 : 4 + Math.round(strength * 4));
-    const litSegments = state === 'active' ? segmentCount : strength * segmentCount;
+    const state = this.bonusRingState;
+    const strength = clamp(this.bonusRingCharge, 0, 1);
+    const baseRadius = this.getRingRadius();
+    const thickness = 1 + 4 * strength;
+    const baseOpacity = 0.05;
+    const opacity = clamp(baseOpacity + strength * 0.95 + (state === 'active' ? 0.1 : 0), 0.05, 1);
+    const brighten = Math.min(0.8, 0.1 + strength * 0.6 + (state === 'active' ? 0.2 : 0));
+    const glow = 10 + thickness * (state === 'active' ? 4.5 : 2);
+    const radius = baseRadius * (1.02 + strength * 0.12 + (state === 'active' ? 0.04 : 0));
+    const globalAlpha = state === 'cooldown'
+      ? Math.max(0, this.bonusRingCooldownTimer / BONUS_COOLDOWN_DURATION)
+      : 1;
+    const hex = rgbToHex(this.bonusRingColor);
 
     ctx.save();
     ctx.translate(center.x, center.y);
+    ctx.rotate(this.bonusRingRotation * 0.02);
+    ctx.globalAlpha = globalAlpha;
+    ctx.lineCap = 'round';
 
-    ctx.strokeStyle = colorWithAlpha(baseHex, 0.25, 0.05 + strength * 0.1);
-    ctx.lineWidth = Math.max(2, thickness * 0.45);
-    ctx.shadowColor = colorWithAlpha(baseHex, 0.18, 0);
+    // inner halo to keep faint ring visible before charging
+    ctx.strokeStyle = colorWithAlpha(hex, Math.max(0.02, opacity * 0.35), brighten * 0.4);
+    ctx.lineWidth = Math.max(1, thickness * 0.35);
+    ctx.shadowColor = colorWithAlpha(hex, Math.max(0.01, opacity * 0.2), brighten * 0.2);
     ctx.shadowBlur = glow * 0.4;
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, TAU);
     ctx.stroke();
 
-    if (litSegments > 0) {
-      const sweep = TAU / segmentCount;
-      ctx.rotate(this.bonusRingRotation);
-      ctx.lineCap = 'round';
-      ctx.strokeStyle = colorWithAlpha(baseHex, opacity, brightness);
-      ctx.lineWidth = thickness;
-      ctx.shadowColor = colorWithAlpha(baseHex, Math.min(1, 0.7 + strength * 0.4), brightness + 0.15);
-      ctx.shadowBlur = glow;
-      const globalAlpha = state === 'cooldown'
-        ? Math.max(0, this.bonusRingCooldownTimer / BONUS_COOLDOWN_DURATION)
-        : 1;
-      ctx.globalAlpha = globalAlpha;
-      for (let i = 0; i < segmentCount; i += 1) {
-        const fill = state === 'active' ? 1 : clamp(litSegments - i, 0, 1);
-        if (fill <= 0) break;
-        const start = i * sweep;
-        const end = start + sweep * fill * 0.88;
-        ctx.beginPath();
-        ctx.arc(0, 0, radius, start, end);
-        ctx.stroke();
-      }
-    }
-
+    // primary energized ring
+    ctx.strokeStyle = colorWithAlpha(hex, opacity, brighten);
+    ctx.lineWidth = thickness;
+    ctx.shadowColor = colorWithAlpha(hex, Math.min(1, opacity * 1.1), brighten + 0.2);
+    ctx.shadowBlur = glow;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, TAU);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -1939,6 +1992,7 @@ export class Game implements InputHandler {
       this.audio.play('correct');
       this.triggerScoreCelebration(ringSymbol);
       this.triggerScoreParticles(ringSymbol);
+      this.addBonusChargeProgress();
 
       this.correctAnswers += 1;
       this.updateMechanicsAfterCorrect();
@@ -1969,6 +2023,7 @@ export class Game implements InputHandler {
       this.effects.flash('#ff4433', 0.2);
       this.audio.play('wrong');
       this.streak = 0;
+      this.penalizeBonusRing();
       const next = this.getRandomSymbolType(this.centerSymbol, ringSymbol.type);
       this.anim.clear();
       this.animateCenterSwap(next, {
@@ -1995,7 +2050,7 @@ export class Game implements InputHandler {
 
     const brighten = Math.min(0.45, (this.streak - 1) * 0.025);
     const color = colorWithAlpha(palette.glow, 0.85, brighten);
-    const chargeTotal = this.computeBonusCharge(count, intensity);
+    const chargeTotal = this.computeParticleCharge(count, intensity);
     this.particles.spawnBurst({
       center,
       origin: { x: ringSymbol.x, y: ringSymbol.y },
@@ -2008,31 +2063,41 @@ export class Game implements InputHandler {
     });
   }
 
-  private computeBonusCharge(count: number, intensity: number) {
+  private computeParticleCharge(count: number, intensity: number) {
     if (count <= 0) return 0;
     const normalized = (count * Math.max(1, intensity)) / 150;
     const streakBonus = Math.min(this.streak, 50) * 0.002;
     return clamp(normalized + streakBonus, 0.015, 0.55);
   }
 
-  private handleParticleAbsorb(event: ParticleAbsorbEvent) {
-    if (this.gamePhase !== 'playing') return;
-    if (this.bonusRingState === 'active' || this.bonusRingState === 'cooldown') {
+  private penalizeBonusRing() {
+    const penalty = this.getBonusPenaltyAmount();
+
+    if (this.bonusRingState === 'active') {
+      this.endBonusRing();
       return;
     }
+
+    if (!Number.isFinite(penalty)) {
+      this.bonusChargePoints = 0;
+    } else {
+      this.bonusChargePoints = Math.max(0, this.bonusChargePoints - penalty);
+    }
+    this.syncBonusChargeTarget();
+
+    if (this.bonusChargePoints <= 0 && this.bonusRingState !== 'cooldown') {
+      this.resetBonusRingColor();
+      this.bonusRingState = 'idle';
+    }
+  }
+
+  private handleParticleAbsorb(event: ParticleAbsorbEvent) {
+    if (this.gamePhase !== 'playing') return;
     const amount = clamp(event.energy, 0, 1);
     if (amount <= 0) return;
-    const next = clamp(this.bonusRingChargeTarget + amount, 0, 1);
-    this.bonusRingChargeTarget = next;
     const rgb = hexToRgb(event.color);
     if (rgb) {
       this.mixBonusRingColor(rgb, amount);
-    }
-    if (this.bonusRingState === 'idle') {
-      this.bonusRingState = 'charging';
-    }
-    if (next >= 0.995) {
-      this.bonusRingState = 'ready';
     }
   }
 
@@ -2061,8 +2126,10 @@ export class Game implements InputHandler {
     this.bonusRingRotation = 0;
     this.bonusRingActiveTimer = 0;
     this.bonusRingCooldownTimer = 0;
+    this.bonusChargePoints = 0;
     this.bonusScoreMultiplier = 1;
     this.resetBonusRingColor();
+    this.syncBonusChargeTarget();
   }
 
   private triggerScoreCelebration(ringSymbol: Symbol) {
