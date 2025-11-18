@@ -1,0 +1,71 @@
+<svg width="1080" height="1920" viewBox="0 0 1080 1920" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vaultGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#050a16" />
+      <stop offset="65%" stop-color="#030611" />
+      <stop offset="100%" stop-color="#010208" />
+    </linearGradient>
+    <radialGradient id="coreGlow" cx="0.5" cy="0.5" r="0.55">
+      <stop offset="0%" stop-color="#0f2d4c" stop-opacity="0.9" />
+      <stop offset="45%" stop-color="#071124" stop-opacity="0.55" />
+      <stop offset="100%" stop-color="#010208" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="railGlow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0d2a4a" stop-opacity="0.15" />
+      <stop offset="50%" stop-color="#3bb5ff" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#0d2a4a" stop-opacity="0.15" />
+    </linearGradient>
+    <linearGradient id="ringEdge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5cfbff" stop-opacity="0.65" />
+      <stop offset="100%" stop-color="#4f7bff" stop-opacity="0.15" />
+    </linearGradient>
+    <linearGradient id="lowerGlow" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#041430" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#041430" stop-opacity="0" />
+    </linearGradient>
+    <clipPath id="frameClip">
+      <rect x="40" y="0" width="1000" height="1920" rx="140" />
+    </clipPath>
+  </defs>
+  <rect width="1080" height="1920" fill="url(#vaultGradient)" />
+  <g clip-path="url(#frameClip)">
+    <rect x="28" y="0" width="1024" height="1920" fill="url(#coreGlow)" />
+    <g opacity="0.4">
+      <rect x="40" y="0" width="8" height="1920" fill="url(#railGlow)" />
+      <rect x="1032" y="0" width="8" height="1920" fill="url(#railGlow)" />
+      <rect x="70" y="0" width="2" height="1920" fill="#10243f" />
+      <rect x="1008" y="0" width="2" height="1920" fill="#10243f" />
+    </g>
+    <g opacity="0.45">
+      <path d="M540 220 C680 340 680 640 540 760 C400 640 400 340 540 220Z" fill="#041028" opacity="0.35" />
+      <path d="M540 1160 C720 1290 720 1540 540 1670 C360 1540 360 1290 540 1160Z" fill="#041028" opacity="0.35" />
+    </g>
+    <g opacity="0.28" stroke="#123454" stroke-width="2">
+      <circle cx="540" cy="960" r="380" />
+      <circle cx="540" cy="960" r="520" />
+      <circle cx="540" cy="960" r="700" />
+    </g>
+    <g opacity="0.35" stroke="url(#ringEdge)" stroke-width="3">
+      <circle cx="540" cy="960" r="300" />
+      <circle cx="540" cy="960" r="610" />
+    </g>
+    <g opacity="0.22" stroke="#1f3e63" stroke-width="1">
+      <line x1="0" y1="200" x2="1080" y2="200" />
+      <line x1="0" y1="420" x2="1080" y2="420" />
+      <line x1="0" y1="700" x2="1080" y2="700" />
+      <line x1="0" y1="1220" x2="1080" y2="1220" />
+      <line x1="0" y1="1500" x2="1080" y2="1500" />
+      <line x1="0" y1="1720" x2="1080" y2="1720" />
+    </g>
+    <g opacity="0.25" stroke="#1c74ff" stroke-width="1.5">
+      <line x1="540" y1="0" x2="540" y2="1920" />
+      <line x1="400" y1="0" x2="400" y2="1920" />
+      <line x1="680" y1="0" x2="680" y2="1920" />
+    </g>
+    <rect x="0" y="1450" width="1080" height="470" fill="url(#lowerGlow)" />
+  </g>
+  <circle cx="540" cy="960" r="120" fill="#030b18" opacity="0.9" />
+  <circle cx="540" cy="960" r="118" fill="none" stroke="url(#ringEdge)" stroke-width="4" opacity="0.9" />
+  <circle cx="540" cy="960" r="60" fill="none" stroke="#69fffb" stroke-width="2" opacity="0.6" />
+  <circle cx="540" cy="960" r="20" fill="#02182e" opacity="0.8" />
+</svg>

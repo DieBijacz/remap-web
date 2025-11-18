@@ -12,6 +12,7 @@ import { ParticleSystem, type ParticleAbsorbEvent } from '../fx/ParticleSystem';
 import { AudioSystem } from '../audio/AudioSystem';
 import correctSfxUrl from '../audio/sfx/sfx_point.wav';
 import wrongSfxUrl from '../audio/sfx/sfx_wrong.wav';
+import dataVaultBackdropUrl from '../assets/data-vault-base.svg';
 import HighscoreStore, { type HighscoreEntry } from '../storage/HighscoreStore';
 import ConfigStore from '../storage/ConfigStore';
 import type { Config as PersistentConfig } from '../storage/ConfigStore';
@@ -290,6 +291,8 @@ export class Game implements InputHandler {
   private effects: EffectsManager;
   private particles = new ParticleSystem();
   private audio: AudioSystem;
+  private vaultBackdropImage: HTMLImageElement | null = null;
+  private vaultBackdropReady = false;
   private score = 0;
   private streak = 0;
   private highscore = 0;
@@ -441,6 +444,7 @@ export class Game implements InputHandler {
 
     // Load audio
     this.loadAudio();
+    this.initVaultBackdrop();
   }
 
   onGameComplete(listener: (summary: GameCompletionSummary) => void) {
@@ -463,6 +467,18 @@ export class Game implements InputHandler {
       this.audio.load('wrong', wrongSfxUrl, 0.3),
       this.audio.load('gameover', '/sounds/gameover.mp3', 0.6)
     ]);
+  }
+
+  private initVaultBackdrop() {
+    if (typeof Image === 'undefined') {
+      return;
+    }
+    const image = new Image();
+    image.src = dataVaultBackdropUrl;
+    image.onload = () => {
+      this.vaultBackdropReady = true;
+    };
+    this.vaultBackdropImage = image;
   }
 
   private getThemeSymbolSet(): SymbolType[] {
@@ -1766,42 +1782,122 @@ export class Game implements InputHandler {
       ? this.playfieldCenter
       : this.getCanvasCenter();
     const state = this.bonusRingState;
-    const strength = clamp(this.bonusRingCharge, 0, 1);
+    const charge = clamp(this.bonusRingCharge, 0, 1);
+    const displayedCharge = state === 'active'
+      ? 1
+      : Math.max(charge, this.bonusRingChargeTarget);
     const baseRadius = this.getRingRadius();
-    const thickness = 1 + 4 * strength;
-    const baseOpacity = 0.05;
-    const opacity = clamp(baseOpacity + strength * 0.95 + (state === 'active' ? 0.1 : 0), 0.05, 1);
-    const brighten = Math.min(0.8, 0.1 + strength * 0.6 + (state === 'active' ? 0.2 : 0));
-    const glow = 10 + thickness * (state === 'active' ? 4.5 : 2);
-    const radius = baseRadius * (1.02 + strength * 0.12 + (state === 'active' ? 0.04 : 0));
+    const outerRadius = baseRadius * (1.05 + displayedCharge * 0.22 + (state === 'active' ? 0.08 : 0));
+    const innerRadius = baseRadius * (0.62 + displayedCharge * 0.08);
+    const irisRadius = baseRadius * 0.38;
+    const rotationOffset = this.bonusRingRotation * 0.02;
     const globalAlpha = state === 'cooldown'
       ? Math.max(0, this.bonusRingCooldownTimer / BONUS_COOLDOWN_DURATION)
       : 1;
     const hex = rgbToHex(this.bonusRingColor);
+    const now = this.time.get();
+    const pulse = state === 'active' ? (Math.sin(now * 8) + 1) / 2 : 0;
+    const baseStroke = Math.max(2, baseRadius * 0.025);
 
     ctx.save();
     ctx.translate(center.x, center.y);
-    ctx.rotate(this.bonusRingRotation * 0.02);
     ctx.globalAlpha = globalAlpha;
     ctx.lineCap = 'round';
 
-    // inner halo to keep faint ring visible before charging
-    ctx.strokeStyle = colorWithAlpha(hex, Math.max(0.02, opacity * 0.35), brighten * 0.4);
-    ctx.lineWidth = Math.max(1, thickness * 0.35);
-    ctx.shadowColor = colorWithAlpha(hex, Math.max(0.01, opacity * 0.2), brighten * 0.2);
-    ctx.shadowBlur = glow * 0.4;
+    const segmentCount = 12;
+    const gap = TAU * 0.02;
+    const usableArc = TAU - segmentCount * gap;
+    const segmentSpan = usableArc / segmentCount;
+    ctx.lineWidth = baseStroke;
+
+    for (let i = 0; i < segmentCount; i += 1) {
+      const start = rotationOffset + i * (segmentSpan + gap) - Math.PI / 2;
+      const end = start + segmentSpan;
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = colorWithAlpha(hex, 0.12, 0.05);
+      ctx.beginPath();
+      ctx.arc(0, 0, outerRadius, start, end);
+      ctx.stroke();
+
+      const fill = clamp(displayedCharge * segmentCount - i, 0, 1);
+      if (fill <= 0) {
+        continue;
+      }
+      ctx.strokeStyle = colorWithAlpha(hex, 0.45 + fill * 0.55, 0.35 + pulse * 0.2);
+      ctx.lineWidth = baseStroke * (1.15 + fill * 0.7 + (state === 'active' ? 0.35 : 0));
+      ctx.shadowColor = colorWithAlpha(hex, 0.35 + fill * 0.6, 0.5 + pulse * 0.35);
+      ctx.shadowBlur = 12 + fill * 25 + (state === 'active' ? 10 : 0);
+      ctx.beginPath();
+      ctx.arc(0, 0, outerRadius, start, start + segmentSpan * fill);
+      ctx.stroke();
+    }
+
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = baseStroke * 0.8;
+    ctx.strokeStyle = colorWithAlpha(hex, 0.18, 0.1);
     ctx.beginPath();
-    ctx.arc(0, 0, radius, 0, TAU);
+    ctx.arc(0, 0, innerRadius, 0, TAU);
     ctx.stroke();
 
-    // primary energized ring
-    ctx.strokeStyle = colorWithAlpha(hex, opacity, brighten);
-    ctx.lineWidth = thickness;
-    ctx.shadowColor = colorWithAlpha(hex, Math.min(1, opacity * 1.1), brighten + 0.2);
-    ctx.shadowBlur = glow;
+    const conductorCount = 4;
+    const conductorStart = baseRadius * 0.28;
+    const conductorEnd = innerRadius - baseStroke * 0.4;
+    for (let i = 0; i < conductorCount; i += 1) {
+      const angle = rotationOffset + (i / conductorCount) * TAU;
+      const reach = conductorStart + (conductorEnd - conductorStart) * (0.35 + displayedCharge * 0.65);
+      ctx.lineWidth = baseStroke * 0.55;
+      ctx.strokeStyle = colorWithAlpha(hex, 0.28 + displayedCharge * 0.4, 0.25 + pulse * 0.2);
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(angle) * conductorStart, Math.sin(angle) * conductorStart);
+      ctx.lineTo(Math.cos(angle) * reach, Math.sin(angle) * reach);
+      ctx.stroke();
+    }
+
+    const bladeCount = 5;
+    const bladeRatio = 0.25 + displayedCharge * 0.6;
+    for (let i = 0; i < bladeCount; i += 1) {
+      const bladeStart = rotationOffset * 0.5 + (i / bladeCount) * TAU;
+      const bladeEnd = bladeStart + (TAU / bladeCount) * bladeRatio;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, irisRadius, bladeStart, bladeEnd);
+      ctx.closePath();
+      ctx.fillStyle = colorWithAlpha(hex, 0.08 + displayedCharge * 0.25, 0.55);
+      ctx.fill();
+    }
+
+    const irisOutline = ctx.createRadialGradient(0, 0, irisRadius * 0.15, 0, 0, irisRadius);
+    irisOutline.addColorStop(0, colorWithAlpha(hex, 0.5, 0.6));
+    irisOutline.addColorStop(1, 'rgba(4, 8, 16, 0.9)');
+    ctx.fillStyle = irisOutline;
     ctx.beginPath();
-    ctx.arc(0, 0, radius, 0, TAU);
+    ctx.arc(0, 0, irisRadius, 0, TAU);
+    ctx.fill();
+    ctx.lineWidth = baseStroke * 0.6;
+    ctx.strokeStyle = colorWithAlpha(hex, 0.26 + displayedCharge * 0.3, 0.4);
     ctx.stroke();
+
+    const coreRadius = Math.max(baseRadius * 0.2, 18);
+    const innerGradient = ctx.createRadialGradient(0, 0, coreRadius * 0.15, 0, 0, coreRadius);
+    innerGradient.addColorStop(0, colorWithAlpha(hex, 0.65 + pulse * 0.2, 0.65));
+    innerGradient.addColorStop(1, 'rgba(3, 8, 16, 0.95)');
+    ctx.fillStyle = innerGradient;
+    ctx.beginPath();
+    ctx.arc(0, 0, coreRadius, 0, TAU);
+    ctx.fill();
+
+    ctx.save();
+    ctx.rotate(rotationOffset * 2);
+    const glyphSize = coreRadius * 1.35;
+    ctx.lineWidth = Math.max(2, glyphSize * 0.15);
+    ctx.strokeStyle = colorWithAlpha(hex, 0.9, 0.45 + pulse * 0.2);
+    ctx.strokeRect(-glyphSize / 2, -glyphSize / 2, glyphSize, glyphSize);
+    if (state === 'ready' || state === 'active') {
+      ctx.fillStyle = colorWithAlpha(hex, 0.25 + pulse * 0.4, 0.65);
+      const inset = glyphSize * 0.32;
+      ctx.fillRect(-inset, -inset, inset * 2, inset * 2);
+    }
+    ctx.restore();
     ctx.restore();
   }
 
@@ -2624,23 +2720,72 @@ export class Game implements InputHandler {
     };
   }
 
-  private drawAttractBackground(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  private drawVaultBackdrop(ctx: CanvasRenderingContext2D, width: number, height: number, overlayOpacity = 0.85) {
     ctx.save();
-    const gradient = ctx.createLinearGradient(0, 0, 0, height);
-    gradient.addColorStop(0, '#050c1a');
-    gradient.addColorStop(1, '#02050b');
-    ctx.fillStyle = gradient;
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = '#03060f';
     ctx.fillRect(0, 0, width, height);
 
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const radius = Math.max(width, height) * 0.85;
-    const vignette = ctx.createRadialGradient(centerX, centerY, radius * 0.2, centerX, centerY, radius);
-    vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    vignette.addColorStop(1, 'rgba(0, 0, 0, 0.55)');
+    const image = this.vaultBackdropImage;
+    if (image && (this.vaultBackdropReady || image.complete)) {
+      const naturalWidth = image.naturalWidth || image.width || 1080;
+      const naturalHeight = image.naturalHeight || image.height || 1920;
+      const scale = Math.max(width / naturalWidth, height / naturalHeight);
+      const drawWidth = naturalWidth * scale;
+      const drawHeight = naturalHeight * scale;
+      const offsetX = (width - drawWidth) / 2;
+      const offsetY = (height - drawHeight) / 2;
+      ctx.globalAlpha = 0.95;
+      ctx.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
+    }
+
+    ctx.globalAlpha = 1;
+    const overlay = ctx.createLinearGradient(0, 0, 0, height);
+    overlay.addColorStop(0, `rgba(4, 10, 19, ${Math.min(1, overlayOpacity)})`);
+    overlay.addColorStop(0.65, `rgba(1, 3, 8, ${Math.min(1, overlayOpacity + 0.06)})`);
+    overlay.addColorStop(1, `rgba(0, 0, 0, ${Math.min(1, overlayOpacity + 0.12)})`);
+    ctx.fillStyle = overlay;
+    ctx.fillRect(0, 0, width, height);
+
+    const vignetteRadius = Math.max(width, height) * 0.8;
+    const vignette = ctx.createRadialGradient(
+      width / 2,
+      height / 2,
+      vignetteRadius * 0.2,
+      width / 2,
+      height / 2,
+      vignetteRadius
+    );
+    vignette.addColorStop(0, 'rgba(15, 56, 96, 0.28)');
+    vignette.addColorStop(0.55, 'rgba(2, 8, 18, 0.65)');
+    vignette.addColorStop(1, 'rgba(0, 0, 0, 0.92)');
     ctx.fillStyle = vignette;
     ctx.fillRect(0, 0, width, height);
+
+    const scanlineSpacing = Math.max(6, height / 140);
+    ctx.globalAlpha = 0.08;
+    ctx.fillStyle = '#0b1423';
+    for (let y = 0; y < height; y += scanlineSpacing) {
+      ctx.fillRect(0, Math.round(y), width, 1);
+    }
+
+    ctx.globalAlpha = 0.14;
+    const beamWidth = Math.max(8, width * 0.015);
+    const leftBeam = ctx.createLinearGradient(0, 0, beamWidth, 0);
+    leftBeam.addColorStop(0, 'rgba(34, 135, 255, 0.18)');
+    leftBeam.addColorStop(1, 'rgba(34, 135, 255, 0)');
+    ctx.fillStyle = leftBeam;
+    ctx.fillRect(0, 0, beamWidth, height);
+    const rightBeam = ctx.createLinearGradient(width - beamWidth, 0, width, 0);
+    rightBeam.addColorStop(0, 'rgba(34, 135, 255, 0)');
+    rightBeam.addColorStop(1, 'rgba(34, 135, 255, 0.18)');
+    ctx.fillStyle = rightBeam;
+    ctx.fillRect(width - beamWidth, 0, beamWidth, height);
     ctx.restore();
+  }
+
+  private drawAttractBackground(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    this.drawVaultBackdrop(ctx, width, height, 0.78);
   }
 
   private drawAmbientSymbols(ctx: CanvasRenderingContext2D) {
@@ -3041,7 +3186,7 @@ export class Game implements InputHandler {
       this.drawAttractScene();
       return;
     }
-    r.clear('#0d1117');
+    this.drawVaultBackdrop(ctx, r.w, r.h, 0.85);
     const anchor = this.getCanvasCenter();
     if (anchor.x !== this.lastRingCenter.x || anchor.y !== this.lastRingCenter.y) {
       this.updateRingLayout();
@@ -3463,59 +3608,114 @@ export class Game implements InputHandler {
 
   private drawTimeBar(ctx: CanvasRenderingContext2D, opacity = 1) {
     const r = this.renderer;
-    const pad = Math.round(Math.max(12, r.h * 0.03));
-    const barH = Math.max(6, Math.round(r.h * 0.012));
+    const pad = Math.round(Math.max(16, r.h * 0.035));
+    const barH = Math.max(10, Math.round(r.h * 0.018));
     const barW = r.w - pad * 2;
     const timeRatio = Math.max(0, Math.min(1, this.timer.get() / this.config.duration));
-
     const clampedOpacity = Math.max(0, Math.min(1, opacity));
-    if (clampedOpacity <= 0) {
-      return;
-    }
+    if (clampedOpacity <= 0) return;
+
+    const warning = timeRatio <= 0.15;
+    const pulse = warning ? (Math.sin(this.time.get() * 18) + 1) / 2 : 0;
+    const neonPrimary = warning ? '#ff4d6f' : '#5fe8ff';
+    const neonSecondary = warning ? '#ffb347' : '#2f9dff';
+    const fillWidth = Math.max(0, barW * timeRatio);
+    const barY = r.h - pad - barH;
+    const radius = barH / 2;
+
+    const drawRoundedRect = (x: number, y: number, w: number, h: number, rads: number) => {
+      const rad = Math.min(rads, Math.min(w, h) / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rad, y);
+      ctx.lineTo(x + w - rad, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + rad);
+      ctx.lineTo(x + w, y + h - rad);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
+      ctx.lineTo(x + rad, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - rad);
+      ctx.lineTo(x, y + rad);
+      ctx.quadraticCurveTo(x, y, x + rad, y);
+      ctx.closePath();
+    };
 
     ctx.save();
     ctx.globalAlpha *= clampedOpacity;
-    ctx.fillStyle = '#1f2632';
-    const barY = r.h - pad - barH;
-    ctx.fillRect(pad, barY, barW, barH);
+    drawRoundedRect(pad, barY, barW, barH, radius);
+    ctx.fillStyle = 'rgba(3, 8, 16, 0.9)';
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.5, Math.round(barH * 0.08));
+    ctx.strokeStyle = 'rgba(113, 147, 188, 0.25)';
+    ctx.stroke();
 
-    ctx.fillStyle = timeRatio > 0.3 ? '#78c6ff' : '#ff4433';
-    ctx.fillRect(pad, barY, Math.round(barW * timeRatio), barH);
+    if (fillWidth > 0.5) {
+      ctx.save();
+      drawRoundedRect(pad, barY, fillWidth, barH, radius);
+      ctx.clip();
+      const gradient = ctx.createLinearGradient(pad, barY, pad + fillWidth, barY);
+      gradient.addColorStop(0, neonSecondary);
+      gradient.addColorStop(0.35, neonPrimary);
+      gradient.addColorStop(1, warning ? '#ff305a' : '#64fff6');
+      ctx.fillStyle = gradient;
+      ctx.shadowColor = neonPrimary;
+      const glow = warning ? 28 + pulse * 14 : 18 + timeRatio * 12;
+      ctx.shadowBlur = glow;
+      ctx.fillRect(pad, barY, fillWidth, barH);
 
-    ctx.save();
-    const fontSize = Math.max(12, Math.round(r.h * 0.04));
-    ctx.font = `${fontSize}px Orbitron, sans-serif`;
-    ctx.textBaseline = 'middle';
-    const timeDisplay = Math.max(0, this.timer.get()).toFixed(1);
-    const deltaActive = this.timeDeltaTimer > 0 && this.timeDeltaValue !== 0;
-    let deltaText = '';
-    if (deltaActive) {
-      const delta = this.timeDeltaValue;
-      const sign = delta > 0 ? '+' : '-';
-      const magnitude = Math.abs(delta).toFixed(1).replace(/\.0$/, '');
-      deltaText = `${sign} ${magnitude}`;
+      ctx.globalAlpha = 0.5 + (warning ? pulse * 0.5 : 0.2);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.fillRect(pad + 6, barY + barH * 0.2, Math.max(0, fillWidth - 12), Math.max(2, barH * 0.18));
+
+      const scanWidth = Math.max(20, barH * 2.4);
+      const scanSpeed = (performance.now() % 1400) / 1400;
+      const offset = scanSpeed * scanWidth * 2;
+      ctx.globalAlpha = 0.18 + (warning ? pulse * 0.25 : 0);
+      ctx.fillStyle = '#ffffff';
+      for (let x = -scanWidth; x < fillWidth + scanWidth; x += scanWidth * 1.5) {
+        ctx.beginPath();
+        ctx.moveTo(pad + x + offset, barY);
+        ctx.lineTo(pad + x + offset + scanWidth * 0.25, barY);
+        ctx.lineTo(pad + x + offset - scanWidth * 0.25, barY + barH);
+        ctx.lineTo(pad + x + offset - scanWidth * 0.5, barY + barH);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
     }
 
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = clampedOpacity;
+    const fontSize = Math.max(14, Math.round(r.h * 0.045));
+    ctx.font = `${fontSize}px Orbitron, sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    const timeDisplay = Math.max(0, this.timer.get()).toFixed(1);
     const centerX = r.w / 2;
     const textY = barY + barH / 2;
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.fillStyle = '#eaf1ff';
+    ctx.strokeStyle = 'rgba(5, 10, 18, 0.9)';
     ctx.lineWidth = Math.max(1, Math.round(fontSize * 0.12));
-    ctx.textAlign = 'center';
+    ctx.shadowColor = warning ? '#ff8aa6' : '#58e1ff';
+    ctx.shadowBlur = warning ? 12 + pulse * 12 : 10;
     ctx.strokeText(timeDisplay, centerX, textY);
     ctx.fillText(timeDisplay, centerX, textY);
 
-    if (deltaActive && deltaText) {
+    const deltaActive = this.timeDeltaTimer > 0 && this.timeDeltaValue !== 0;
+    if (deltaActive) {
+      const magnitude = Math.abs(this.timeDeltaValue).toFixed(1).replace(/\.0$/, '');
+      const sign = this.timeDeltaValue > 0 ? '+' : '-';
+      const deltaText = `${sign} ${magnitude}`;
       const fade = Math.max(0, Math.min(1, this.timeDeltaTimer / TIME_DELTA_DISPLAY_SEC));
-      const offsetY = Math.max(barH + fontSize * 0.25, Math.round(fontSize * 0.9));
+      const offsetY = Math.max(barH + fontSize * 0.25, Math.round(fontSize));
       ctx.save();
       ctx.globalAlpha = fade;
-      ctx.fillStyle = this.timeDeltaValue > 0 ? '#7ee787' : '#ff6f6f';
+      ctx.fillStyle = this.timeDeltaValue > 0 ? '#7ee787' : '#ff9ba0';
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+      ctx.shadowColor = this.timeDeltaValue > 0 ? '#41ff9d' : '#ff5a7a';
+      ctx.shadowBlur = 8;
       ctx.strokeText(deltaText, centerX, textY - offsetY);
       ctx.fillText(deltaText, centerX, textY - offsetY);
       ctx.restore();
     }
-    ctx.restore();
     ctx.restore();
   }
 
