@@ -1788,8 +1788,6 @@ export class Game implements InputHandler {
       : Math.max(charge, this.bonusRingChargeTarget);
     const baseRadius = this.getRingRadius();
     const outerRadius = baseRadius * (1.05 + displayedCharge * 0.22 + (state === 'active' ? 0.08 : 0));
-    const innerRadius = baseRadius * (0.62 + displayedCharge * 0.08);
-    const irisRadius = baseRadius * 0.38;
     const rotationOffset = this.bonusRingRotation * 0.02;
     const globalAlpha = state === 'cooldown'
       ? Math.max(0, this.bonusRingCooldownTimer / BONUS_COOLDOWN_DURATION)
@@ -1803,6 +1801,13 @@ export class Game implements InputHandler {
     ctx.translate(center.x, center.y);
     ctx.globalAlpha = globalAlpha;
     ctx.lineCap = 'round';
+
+    ctx.strokeStyle = colorWithAlpha(hex, 0.1, 0.05);
+    ctx.lineWidth = Math.max(1, baseStroke * 0.7);
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(0, 0, outerRadius, 0, TAU);
+    ctx.stroke();
 
     const segmentCount = 12;
     const gap = TAU * 0.02;
@@ -1832,72 +1837,12 @@ export class Game implements InputHandler {
       ctx.stroke();
     }
 
-    ctx.shadowBlur = 0;
-    ctx.lineWidth = baseStroke * 0.8;
-    ctx.strokeStyle = colorWithAlpha(hex, 0.18, 0.1);
+    ctx.globalAlpha = Math.max(0, (state === 'active' ? 0.35 : 0.2) + displayedCharge * 0.15);
+    ctx.lineWidth = Math.max(1, baseStroke * 0.25);
+    ctx.strokeStyle = colorWithAlpha(hex, 0.4 + pulse * 0.2, 0.35);
     ctx.beginPath();
-    ctx.arc(0, 0, innerRadius, 0, TAU);
+    ctx.arc(0, 0, outerRadius + baseStroke * 0.8, 0, TAU);
     ctx.stroke();
-
-    const conductorCount = 4;
-    const conductorStart = baseRadius * 0.28;
-    const conductorEnd = innerRadius - baseStroke * 0.4;
-    for (let i = 0; i < conductorCount; i += 1) {
-      const angle = rotationOffset + (i / conductorCount) * TAU;
-      const reach = conductorStart + (conductorEnd - conductorStart) * (0.35 + displayedCharge * 0.65);
-      ctx.lineWidth = baseStroke * 0.55;
-      ctx.strokeStyle = colorWithAlpha(hex, 0.28 + displayedCharge * 0.4, 0.25 + pulse * 0.2);
-      ctx.beginPath();
-      ctx.moveTo(Math.cos(angle) * conductorStart, Math.sin(angle) * conductorStart);
-      ctx.lineTo(Math.cos(angle) * reach, Math.sin(angle) * reach);
-      ctx.stroke();
-    }
-
-    const bladeCount = 5;
-    const bladeRatio = 0.25 + displayedCharge * 0.6;
-    for (let i = 0; i < bladeCount; i += 1) {
-      const bladeStart = rotationOffset * 0.5 + (i / bladeCount) * TAU;
-      const bladeEnd = bladeStart + (TAU / bladeCount) * bladeRatio;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, irisRadius, bladeStart, bladeEnd);
-      ctx.closePath();
-      ctx.fillStyle = colorWithAlpha(hex, 0.08 + displayedCharge * 0.25, 0.55);
-      ctx.fill();
-    }
-
-    const irisOutline = ctx.createRadialGradient(0, 0, irisRadius * 0.15, 0, 0, irisRadius);
-    irisOutline.addColorStop(0, colorWithAlpha(hex, 0.5, 0.6));
-    irisOutline.addColorStop(1, 'rgba(4, 8, 16, 0.9)');
-    ctx.fillStyle = irisOutline;
-    ctx.beginPath();
-    ctx.arc(0, 0, irisRadius, 0, TAU);
-    ctx.fill();
-    ctx.lineWidth = baseStroke * 0.6;
-    ctx.strokeStyle = colorWithAlpha(hex, 0.26 + displayedCharge * 0.3, 0.4);
-    ctx.stroke();
-
-    const coreRadius = Math.max(baseRadius * 0.2, 18);
-    const innerGradient = ctx.createRadialGradient(0, 0, coreRadius * 0.15, 0, 0, coreRadius);
-    innerGradient.addColorStop(0, colorWithAlpha(hex, 0.65 + pulse * 0.2, 0.65));
-    innerGradient.addColorStop(1, 'rgba(3, 8, 16, 0.95)');
-    ctx.fillStyle = innerGradient;
-    ctx.beginPath();
-    ctx.arc(0, 0, coreRadius, 0, TAU);
-    ctx.fill();
-
-    ctx.save();
-    ctx.rotate(rotationOffset * 2);
-    const glyphSize = coreRadius * 1.35;
-    ctx.lineWidth = Math.max(2, glyphSize * 0.15);
-    ctx.strokeStyle = colorWithAlpha(hex, 0.9, 0.45 + pulse * 0.2);
-    ctx.strokeRect(-glyphSize / 2, -glyphSize / 2, glyphSize, glyphSize);
-    if (state === 'ready' || state === 'active') {
-      ctx.fillStyle = colorWithAlpha(hex, 0.25 + pulse * 0.4, 0.65);
-      const inset = glyphSize * 0.32;
-      ctx.fillRect(-inset, -inset, inset * 2, inset * 2);
-    }
-    ctx.restore();
     ctx.restore();
   }
 
