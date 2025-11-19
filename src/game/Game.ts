@@ -125,6 +125,11 @@ type ScoreTracer = {
 };
 
 type TimeBonusMode = 'classic' | 'endurance' | 'hybrid';
+type SpinShuffleOptions = {
+  animate?: boolean;
+  centerType?: SymbolType;
+  matchModeOverride?: MatchMechanicMode | null;
+};
 
 interface HudMetrics {
   hudPad: number;
@@ -295,6 +300,12 @@ export class Game implements InputHandler {
   private effects: EffectsManager;
   private particles = new ParticleSystem();
   private audio: AudioSystem;
+  private pendingSpinShuffle: SpinShuffleOptions | null = null;
+  private vaultBackdropCanvas: HTMLCanvasElement | null = null;
+  private vaultBackdropCtx: CanvasRenderingContext2D | null = null;
+  private vaultBackdropOverlay = 0.85;
+  private vaultBackdropDirty = true;
+  private handleWindowResize = () => this.invalidateVaultBackdrop();
   private vaultBackdropImage: HTMLImageElement | null = null;
   private vaultBackdropReady = false;
   private score = 0;
@@ -451,6 +462,9 @@ export class Game implements InputHandler {
     // Load audio
     this.loadAudio();
     this.initVaultBackdrop();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', this.handleWindowResize);
+    }
   }
 
   onGameComplete(listener: (summary: GameCompletionSummary) => void) {
@@ -483,8 +497,13 @@ export class Game implements InputHandler {
     image.src = dataVaultBackdropUrl;
     image.onload = () => {
       this.vaultBackdropReady = true;
+      this.invalidateVaultBackdrop();
     };
     this.vaultBackdropImage = image;
+  }
+
+  private invalidateVaultBackdrop() {
+    this.vaultBackdropDirty = true;
   }
 
   private getThemeSymbolSet(): SymbolType[] {
@@ -609,7 +628,32 @@ export class Game implements InputHandler {
     this.updateRingLayout();
   }
 
-  private applySpinShuffle(opts?: { animate?: boolean; centerType?: SymbolType; matchModeOverride?: MatchMechanicMode | null }) {
+  private requestSpinShuffle(opts?: SpinShuffleOptions) {
+    if (!this.pendingSpinShuffle) {
+      this.pendingSpinShuffle = opts ? { ...opts } : {};
+      return;
+    }
+    if (!opts) {
+      return;
+    }
+    const current = this.pendingSpinShuffle;
+    this.pendingSpinShuffle = {
+      animate: opts.animate ?? current.animate,
+      centerType: opts.centerType ?? current.centerType,
+      matchModeOverride: opts.matchModeOverride ?? current.matchModeOverride
+    };
+  }
+
+  private flushPendingSpinShuffle() {
+    if (!this.pendingSpinShuffle) {
+      return;
+    }
+    const opts = this.pendingSpinShuffle;
+    this.pendingSpinShuffle = null;
+    this.applySpinShuffle(opts);
+  }
+
+  private applySpinShuffle(opts?: SpinShuffleOptions) {
     if (this.symbols.length === 0) return;
     const targetCenter = opts?.centerType ?? this.centerSymbol;
     const matchMode = opts?.matchModeOverride ?? this.getMatchMechanicMode();
@@ -1113,7 +1157,7 @@ export class Game implements InputHandler {
   }
 
   private handlePostAnswerLayoutChange(nextCenter: SymbolType) {
-    this.applySpinShuffle({ centerType: nextCenter });
+    this.requestSpinShuffle({ centerType: nextCenter });
     if (this.activeMechanics.includes('memory')) {
       this.restartMemoryPreview();
     }
@@ -1181,7 +1225,7 @@ export class Game implements InputHandler {
         if (this.resolvingAnswer) {
           break;
         }
-        this.applySpinShuffle();
+        this.requestSpinShuffle();
         this.restartMemoryPreview();
         break;
       case 'joystick':
@@ -1388,8 +1432,8 @@ export class Game implements InputHandler {
 
   private reapplyActiveMechanicLayout() {
     const matchMode = this.getMatchMechanicMode();
-    this.applyDefaultRingOrder();
     if (matchMode) {
+      this.applyDefaultRingOrder();
       this.applyCenterSymbol(this.centerSymbol, { resetVisual: false });
       this.memorySymbolsHidden = false;
       this.memoryRevealTimer = 0;
@@ -1399,10 +1443,11 @@ export class Game implements InputHandler {
     const memoryActive = this.activeMechanics.includes('memory');
     if (memoryActive) {
       if (!this.resolvingAnswer) {
-        this.applySpinShuffle();
+        this.requestSpinShuffle();
         this.restartMemoryPreview();
       }
     } else {
+      this.applyDefaultRingOrder();
       this.memorySymbolsHidden = false;
       this.memoryRevealTimer = 0;
     }
@@ -1983,8 +2028,6 @@ export class Game implements InputHandler {
     }
     if (this.anim.isActive()) return; // ignore input during animations
 
-    console.log('[debug] Game.onKeyDown', e.key);
-
     // If no symbols are initialized yet, ignore input and warn
     if (!this.symbols || this.symbols.length === 0) {
       console.warn('[debug] onKeyDown - no symbols to target yet');
@@ -2021,8 +2064,6 @@ export class Game implements InputHandler {
     if (this.introTransition) {
       return;
     }
-    console.log('[debug] handleInput', { inputDir, symbolCount: this.symbols.length, mechanics: this.activeMechanics });
-
     const dirToIndex: Record<Direction, number> = {
       up: 0,
       left: 1,
@@ -2040,23 +2081,6 @@ export class Game implements InputHandler {
 
     const matchMode = this.getMatchMechanicMode();
     const expectedType = matchMode ? null : this.getExpectedSymbolType();
-    console.log(
-      '[debug] centerSymbol',
-      this.centerSymbol,
-      'mode',
-      matchMode ?? 'shape',
-      'expectedType',
-      expectedType,
-      'ringSymbol',
-      ringSymbol.type,
-      'ringColor',
-      ringSymbol.color,
-      'centerColor',
-      this.centerSymbolColor,
-      'remap',
-      this.remapMapping
-    );
-
     const isCorrect = matchMode === 'match-color'
       ? this.isMatchColorCorrect(ringSymbol)
       : matchMode === 'match-shape'
@@ -2368,7 +2392,6 @@ export class Game implements InputHandler {
     this.centerScale = this.centerBaseScale;
     this.centerOpacity = 1;
     this.recordPromptSpawn();
-    console.log('[debug] initSymbols created', this.symbols.length, 'symbols, currentTargetIndex=', this.currentTargetIndex, 'types=', this.symbols.map(s => s.type));
   }
 
   private computeIntroRotationTarget(startRotation: number) {
@@ -2697,6 +2720,53 @@ export class Game implements InputHandler {
   }
 
   private drawVaultBackdrop(ctx: CanvasRenderingContext2D, width: number, height: number, overlayOpacity = 0.85) {
+    const bufferCtx = this.ensureVaultBackdropBuffer(width, height);
+    if (bufferCtx && this.vaultBackdropCanvas) {
+      const overlayChanged = Math.abs(overlayOpacity - this.vaultBackdropOverlay) > 0.01;
+      if (this.vaultBackdropDirty || overlayChanged) {
+        this.paintVaultBackdrop(bufferCtx, width, height, overlayOpacity);
+        this.vaultBackdropDirty = false;
+        this.vaultBackdropOverlay = overlayOpacity;
+      }
+      ctx.save();
+      ctx.globalAlpha = 1;
+      ctx.drawImage(this.vaultBackdropCanvas, 0, 0, width, height);
+      ctx.restore();
+      return;
+    }
+    // Fallback if offscreen buffer is unavailable (e.g., SSR)
+    this.paintVaultBackdrop(ctx, width, height, overlayOpacity);
+  }
+
+  private ensureVaultBackdropBuffer(width: number, height: number) {
+    if (typeof document === 'undefined') {
+      return null;
+    }
+    if (!this.vaultBackdropCanvas) {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        return null;
+      }
+      this.vaultBackdropCanvas = canvas;
+      this.vaultBackdropCtx = ctx;
+    }
+    const canvas = this.vaultBackdropCanvas;
+    const bufferCtx = this.vaultBackdropCtx;
+    if (!canvas || !bufferCtx) {
+      return null;
+    }
+    const targetW = Math.max(1, Math.round(width));
+    const targetH = Math.max(1, Math.round(height));
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+      this.vaultBackdropDirty = true;
+    }
+    return bufferCtx;
+  }
+
+  private paintVaultBackdrop(ctx: CanvasRenderingContext2D, width: number, height: number, overlayOpacity = 0.85) {
     ctx.save();
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#03060f';
@@ -2880,7 +2950,6 @@ export class Game implements InputHandler {
     this.scoreTracers = [];
     this.particles.clear();
     this.particles.setDespawnEnabled(!this.particlesPersist);
-    console.log('[debug] Game.start() called');
     this.time.resumeLayer();
     this.clock.start((dt) => this.update(dt));
   }
@@ -2892,6 +2961,7 @@ export class Game implements InputHandler {
       this.drawAttractScene();
       return;
     }
+    this.flushPendingSpinShuffle();
 
     if (this.introTransition) {
       const introActive = this.updateIntroTransition(dt);
