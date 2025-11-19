@@ -17,12 +17,14 @@ export type Config = {
   menuSymbolSpeedMultiplier?: number;
   minTimeBonus?: number;
   mechanicInterval?: number;
+  mechanicIntervalByDifficulty?: Partial<Record<'easy' | 'medium' | 'hard' | 'progressive', number>>;
   difficulty?: 'easy' | 'medium' | 'hard' | 'progressive';
   mechanicRandomize?: boolean;
   symbolScale?: number;
   symbolStroke?: number;
   uiFontScale?: number;
   memoryPreviewDuration?: number;
+  memoryPreviewByDifficulty?: Partial<Record<'easy' | 'medium' | 'hard' | 'progressive', number>>;
   particlesPerScore?: number;
   particlesPersist?: boolean;
   scoreRayThickness?: number;

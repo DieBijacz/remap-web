@@ -7,6 +7,28 @@ import { LeaderboardScreen, type LeaderboardScreenData } from '../ui/leaderboard
 import { SettingsScreen } from '../ui/settings/SettingsScreen';
 import { sanitizeSymbolColors } from '../config/colorPresets';
 
+type Difficulty = 'easy' | 'medium' | 'hard' | 'progressive';
+
+const DIFFICULTY_PRESETS: Record<Difficulty, { mechanicInterval: number; memoryPreviewDuration: number }> = {
+  easy: { mechanicInterval: 18, memoryPreviewDuration: 2 },
+  medium: { mechanicInterval: 14, memoryPreviewDuration: 1.6 },
+  hard: { mechanicInterval: 10, memoryPreviewDuration: 1.2 },
+  progressive: { mechanicInterval: 12, memoryPreviewDuration: 1.4 }
+};
+
+const clampNumber = (value: number, min: number, max: number, decimals = 2) => {
+  const clamped = Math.max(min, Math.min(max, value));
+  const factor = Math.pow(10, decimals);
+  return Math.round(clamped * factor) / factor;
+};
+
+const normalizeDifficulty = (value: string | undefined): Difficulty => {
+  if (value === 'easy' || value === 'medium' || value === 'hard' || value === 'progressive') {
+    return value;
+  }
+  return 'easy';
+};
+
 export class App {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -71,7 +93,24 @@ export class App {
     const { particlesEnabled, scoreRayEnabled, ...rest } = raw;
     const persistedConfig: PersistentConfig = rest;
 
-    const persistedMemoryPreview = persistedConfig.memoryPreviewDuration ?? 1;
+    const difficulty = normalizeDifficulty(persistedConfig.difficulty);
+    const intervalMap = this.normalizeIntervalMap(persistedConfig.mechanicIntervalByDifficulty);
+    const memoryMap = this.normalizeMemoryPreviewMap(persistedConfig.memoryPreviewByDifficulty);
+    const resolvedMechanicInterval = clampNumber(
+      persistedConfig.mechanicInterval ?? intervalMap[difficulty] ?? DIFFICULTY_PRESETS[difficulty].mechanicInterval,
+      1,
+      60,
+      0
+    );
+    intervalMap[difficulty] = resolvedMechanicInterval;
+    const resolvedMemoryPreview = clampNumber(
+      persistedConfig.memoryPreviewDuration ??
+        memoryMap[difficulty] ??
+        DIFFICULTY_PRESETS[difficulty].memoryPreviewDuration,
+      0.2,
+      6
+    );
+    memoryMap[difficulty] = resolvedMemoryPreview;
     const persistedParticlesPerScore = particlesEnabled === false ? 0 : persistedConfig.particlesPerScore ?? 4;
     const persistedScoreRayCount = scoreRayEnabled === false ? 0 : persistedConfig.scoreRayCount ?? 3;
     const persistedSymbolTheme = persistedConfig.symbolTheme === 'pacman' ? 'pacman' : 'classic';
@@ -91,10 +130,12 @@ export class App {
       menuSymbolGrowthMultiplier: persistedConfig.menuSymbolGrowthMultiplier ?? 4.5,
       menuSymbolSpeedMultiplier: persistedConfig.menuSymbolSpeedMultiplier ?? 1,
       minTimeBonus: persistedConfig.minTimeBonus ?? 0.5,
-      mechanicInterval: persistedConfig.mechanicInterval ?? 10,
+      mechanicInterval: resolvedMechanicInterval,
+      mechanicIntervalByDifficulty: intervalMap,
       mechanicRandomize: persistedConfig.mechanicRandomize ?? false,
-      memoryPreviewDuration: persistedMemoryPreview,
-      difficulty: persistedConfig.difficulty ?? 'medium',
+      memoryPreviewDuration: resolvedMemoryPreview,
+      memoryPreviewByDifficulty: memoryMap,
+      difficulty,
       symbolScale: persistedConfig.symbolScale ?? 1,
       symbolStroke: persistedConfig.symbolStroke ?? 1,
       symbolTheme: persistedSymbolTheme,
@@ -257,9 +298,11 @@ export class App {
   }
 
   private handleSettingsChange(values: PersistentConfig) {
-    this.settingsValues = { ...values };
+    const resolved = this.resolveDifficultyLinkedSettings(values);
+    this.settingsValues = { ...resolved };
     this.configStore.save(this.settingsValues);
     this.game.refreshSettings(this.settingsValues);
+    this.settingsScreen.setValues(this.settingsValues, { preserveSelection: true });
   }
 
   private handleResetHighscore() {
@@ -277,6 +320,101 @@ export class App {
       didQualify: summary.didQualify
     };
     this.stateManager.showState(GameState.LEADERBOARD);
+  }
+
+  private resolveDifficultyLinkedSettings(values: PersistentConfig): PersistentConfig {
+    const previousDifficulty = normalizeDifficulty(this.settingsValues?.difficulty);
+    const difficulty = normalizeDifficulty(values.difficulty ?? previousDifficulty);
+    const intervalMap = this.normalizeIntervalMap(
+      values.mechanicIntervalByDifficulty ?? this.settingsValues?.mechanicIntervalByDifficulty
+    );
+    const memoryMap = this.normalizeMemoryPreviewMap(
+      values.memoryPreviewByDifficulty ?? this.settingsValues?.memoryPreviewByDifficulty
+    );
+
+    const intervalChanged = typeof values.mechanicInterval === 'number' && values.mechanicInterval !== this.settingsValues?.mechanicInterval;
+    let mechanicInterval: number;
+    if (difficulty !== previousDifficulty) {
+      const preset = DIFFICULTY_PRESETS[difficulty].mechanicInterval;
+      const stored = values.mechanicIntervalByDifficulty?.[difficulty] ?? intervalMap[difficulty];
+      mechanicInterval = clampNumber(stored ?? preset, 1, 60, 0);
+    } else if (intervalChanged) {
+      mechanicInterval = clampNumber(values.mechanicInterval ?? intervalMap[difficulty], 1, 60, 0);
+    } else {
+      const fallback = values.mechanicInterval ?? intervalMap[difficulty] ?? DIFFICULTY_PRESETS[difficulty].mechanicInterval;
+      mechanicInterval = clampNumber(fallback, 1, 60, 0);
+    }
+    intervalMap[difficulty] = mechanicInterval;
+
+    const memoryChanged =
+      typeof values.memoryPreviewDuration === 'number' &&
+      values.memoryPreviewDuration !== this.settingsValues?.memoryPreviewDuration;
+    let memoryPreviewDuration: number;
+    if (difficulty !== previousDifficulty) {
+      const preset = DIFFICULTY_PRESETS[difficulty].memoryPreviewDuration;
+      const stored = values.memoryPreviewByDifficulty?.[difficulty] ?? memoryMap[difficulty];
+      memoryPreviewDuration = clampNumber(stored ?? preset, 0.2, 6);
+    } else if (memoryChanged) {
+      memoryPreviewDuration = clampNumber(
+        values.memoryPreviewDuration ?? memoryMap[difficulty],
+        0.2,
+        6
+      );
+    } else {
+      const fallback =
+        values.memoryPreviewDuration ??
+        memoryMap[difficulty] ??
+        DIFFICULTY_PRESETS[difficulty].memoryPreviewDuration;
+      memoryPreviewDuration = clampNumber(fallback, 0.2, 6);
+    }
+    memoryMap[difficulty] = memoryPreviewDuration;
+
+    return {
+      ...values,
+      difficulty,
+      mechanicInterval,
+      mechanicIntervalByDifficulty: intervalMap,
+      memoryPreviewDuration,
+      memoryPreviewByDifficulty: memoryMap
+    };
+  }
+
+  private normalizeIntervalMap(
+    map?: PersistentConfig['mechanicIntervalByDifficulty']
+  ): Record<Difficulty, number> {
+    const base: Record<Difficulty, number> = {
+      easy: DIFFICULTY_PRESETS.easy.mechanicInterval,
+      medium: DIFFICULTY_PRESETS.medium.mechanicInterval,
+      hard: DIFFICULTY_PRESETS.hard.mechanicInterval,
+      progressive: DIFFICULTY_PRESETS.progressive.mechanicInterval
+    };
+    if (!map) return base;
+    (Object.keys(map) as Difficulty[]).forEach((key) => {
+      const value = map[key];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        base[key] = clampNumber(value, 1, 60, 0);
+      }
+    });
+    return base;
+  }
+
+  private normalizeMemoryPreviewMap(
+    map?: PersistentConfig['memoryPreviewByDifficulty']
+  ): Record<Difficulty, number> {
+    const base: Record<Difficulty, number> = {
+      easy: DIFFICULTY_PRESETS.easy.memoryPreviewDuration,
+      medium: DIFFICULTY_PRESETS.medium.memoryPreviewDuration,
+      hard: DIFFICULTY_PRESETS.hard.memoryPreviewDuration,
+      progressive: DIFFICULTY_PRESETS.progressive.memoryPreviewDuration
+    };
+    if (!map) return base;
+    (Object.keys(map) as Difficulty[]).forEach((key) => {
+      const value = map[key];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        base[key] = clampNumber(value, 0.2, 6);
+      }
+    });
+    return base;
   }
 
 }

@@ -79,8 +79,8 @@ export type GameCompletionSummary = {
   didQualify: boolean;
   playerName: string | null;
 };
-const MECHANIC_INTERVAL = 10;
-const MEMORY_PREVIEW_DURATION = 1.0;
+const MECHANIC_INTERVAL = 18;
+const MEMORY_PREVIEW_DURATION = 2.0;
 const RING_BASE_ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
 const MECHANIC_COLORS: Record<MechanicType, string> = {
   none: '#9da7b3',
@@ -380,7 +380,7 @@ export class Game implements InputHandler {
   private currentMechanicBlock = 0;
   private mechanicInterval = MECHANIC_INTERVAL;
   private mechanicRandomize = false;
-  private difficulty: 'easy' | 'medium' | 'hard' | 'progressive' = 'medium';
+  private difficulty: 'easy' | 'medium' | 'hard' | 'progressive' = 'easy';
   private mechanicSlots = 1;
   private activeMechanics: MechanicType[] = [];
   private mechanicBannerText: string | null = null;
@@ -852,6 +852,20 @@ export class Game implements InputHandler {
       case 'hard':
       default:
         return Number.POSITIVE_INFINITY;
+    }
+  }
+
+  private getDefaultMechanicInterval(): number {
+    switch (this.difficulty) {
+      case 'hard':
+        return 10;
+      case 'progressive':
+        return 12;
+      case 'medium':
+        return 14;
+      case 'easy':
+      default:
+        return MECHANIC_INTERVAL;
     }
   }
 
@@ -1740,7 +1754,7 @@ export class Game implements InputHandler {
     ) {
       this.difficulty = difficultySetting;
     } else {
-      this.difficulty = 'medium';
+      this.difficulty = 'easy';
     }
     const difficultyChanged = this.difficulty !== previousDifficulty;
     if (this.difficulty !== 'progressive') {
@@ -1764,7 +1778,8 @@ export class Game implements InputHandler {
             ? 1
             : 2;
 
-    const rawInterval = typeof data.mechanicInterval === 'number' ? data.mechanicInterval : this.mechanicInterval;
+    const defaultInterval = this.getDefaultMechanicInterval();
+    const rawInterval = typeof data.mechanicInterval === 'number' ? data.mechanicInterval : defaultInterval;
     const clampedInterval = Math.max(1, Math.round(clamp(rawInterval, 1, 60)));
     const randomize = this.difficulty === 'progressive'
       ? true

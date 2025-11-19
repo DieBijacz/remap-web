@@ -49,14 +49,29 @@ export class SettingsScreen {
     this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
   }
 
-  setValues(values: PersistentConfig) {
+  setValues(values: PersistentConfig, options?: { preserveSelection?: boolean }) {
+    const preserveSelection = options?.preserveSelection ?? false;
     this.values = { ...values };
-    this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
-    this.colorChannelFocus = {};
-    this.colorEditIndex = null;
-    this.subTabFocus = false;
-    this.sectionFocus = false;
-    this.sectionIndices = {};
+    if (preserveSelection) {
+      const items = this.getCurrentItems();
+      if (items.length === 0) {
+        this.selectionIndex = 0;
+      } else {
+        this.selectionIndex = Math.min(this.selectionIndex, items.length - 1);
+        const current = items[this.selectionIndex];
+        if (!current || current.type === 'label') {
+          this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+        }
+      }
+      // Keep focus and color edit state when preserving selection.
+    } else {
+      this.selectionIndex = this.getFirstSelectableIndex(this.currentTabIndex);
+      this.colorChannelFocus = {};
+      this.colorEditIndex = null;
+      this.subTabFocus = false;
+      this.sectionFocus = false;
+      this.sectionIndices = {};
+    }
   }
 
   getValues() {

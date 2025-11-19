@@ -125,13 +125,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
         label: 'Difficulty',
         options: ['easy', 'medium', 'hard', 'progressive'],
         format: (value) => value.charAt(0).toUpperCase() + value.slice(1)
-      }
-    ]
-  },
-  {
-    key: 'mechanics',
-    label: 'Mechanics',
-    items: [
+      },
       {
         type: 'number',
         key: 'mechanicInterval',
@@ -141,6 +135,21 @@ export const SETTINGS_TABS: SettingsTab[] = [
         step: 1,
         format: (v) => `${Math.round(v)} hits`
       },
+      {
+        type: 'number',
+        key: 'memoryPreviewDuration',
+        label: 'Memory Hide Delay',
+        min: 0.2,
+        max: 6,
+        step: 0.1,
+        format: (v) => `${v.toFixed(1)} s`
+      }
+    ]
+  },
+  {
+    key: 'mechanics',
+    label: 'Mechanics',
+    items: [
       {
         type: 'toggle',
         key: 'mechanicRandomize',
@@ -158,15 +167,6 @@ export const SETTINGS_TABS: SettingsTab[] = [
         key: 'mechanicEnableMemory',
         label: 'Memory Mechanic',
         format: (value) => (value ? 'On' : 'Off')
-      },
-      {
-        type: 'number',
-        key: 'memoryPreviewDuration',
-        label: 'Memory Hide Delay',
-        min: 0.2,
-        max: 6,
-        step: 0.1,
-        format: (v) => `${v.toFixed(1)} s`
       },
       {
         type: 'toggle',
