@@ -16,6 +16,7 @@ import dataVaultBackdropUrl from '../assets/data-vault-base.svg';
 import HighscoreStore, { type HighscoreEntry } from '../storage/HighscoreStore';
 import ConfigStore from '../storage/ConfigStore';
 import type { Config as PersistentConfig } from '../storage/ConfigStore';
+import { buildAttractCards, type AttractCard } from './AttractTutorial';
 import {
   DEFAULT_SYMBOL_COLORS,
   cloneColor,
@@ -370,6 +371,9 @@ export class Game implements InputHandler {
     growthMultiplier: 4.5,
     speedMultiplier: 1
   };
+  private attractCards: AttractCard[] = buildAttractCards();
+  private attractCardIndex = 0;
+  private attractCardTimer = 0;
   private menuColorPool: RGBColor[] = DEFAULT_SYMBOL_COLORS.map(cloneColor);
   private playfieldCenter = { x: 0, y: 0 };
   private lastRingCenter = { x: 0, y: 0 };
@@ -1623,6 +1627,9 @@ export class Game implements InputHandler {
     this.attractStartRect = null;
     this.attractPulseTime = 0;
     this.attractSymbols = [];
+    this.attractCards = buildAttractCards();
+    this.attractCardIndex = 0;
+    this.attractCardTimer = 0;
     this.introTransition = null;
     this.time.set(0);
     this.timer.set(this.config.duration);
@@ -2696,6 +2703,7 @@ export class Game implements InputHandler {
     } else {
       this.attractPromptAlpha = Math.min(1, this.attractPromptAlpha + dt * 1.2);
     }
+    this.advanceAttractCard(dt);
   }
 
   private updateAttractSymbols(dt: number, width: number, height: number) {
@@ -2924,6 +2932,504 @@ export class Game implements InputHandler {
       if (entry.age < entry.spawnDelay) return;
       drawSymbol(ctx, entry.symbol, false, 0.7);
     });
+    ctx.restore();
+  }
+
+  private advanceAttractCard(dt: number) {
+    if (this.gamePhase !== 'attract') return;
+    if (!this.attractCards.length) {
+      this.attractCards = buildAttractCards();
+    }
+    const card = this.getCurrentAttractCard();
+    if (!card) return;
+    const duration = Math.max(0.5, card.duration);
+    this.attractCardTimer += dt;
+    if (this.attractCardTimer >= duration) {
+      this.attractCardTimer = 0;
+      this.attractCardIndex = (this.attractCardIndex + 1) % this.attractCards.length;
+    }
+  }
+
+  private getCurrentAttractCard(): AttractCard | null {
+    if (!this.attractCards.length) {
+      return null;
+    }
+    const idx = ((this.attractCardIndex % this.attractCards.length) + this.attractCards.length) % this.attractCards.length;
+    return this.attractCards[idx] ?? null;
+  }
+
+  private getAttractCardAlpha(card: AttractCard | null): number {
+    if (!card) return this.attractPromptAlpha;
+    const duration = Math.max(0.5, card.duration);
+    const fadeWindow = Math.min(0.6, duration * 0.3);
+    const t = this.attractCardTimer;
+    const fadeIn = clamp(t / Math.max(0.0001, fadeWindow), 0, 1);
+    const fadeOut = clamp((duration - t) / Math.max(0.0001, fadeWindow), 0, 1);
+    return Math.min(fadeIn, fadeOut) * this.attractPromptAlpha;
+  }
+
+  private drawAttractTutorialCard(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    const card = this.getCurrentAttractCard();
+    if (!card) {
+      this.drawAttractPrompt(ctx, width, height);
+      return;
+    }
+    const alpha = this.getAttractCardAlpha(card);
+    const overlayAlpha = Math.max(0.35, Math.min(0.8, alpha + 0.2));
+    ctx.save();
+    ctx.globalAlpha = overlayAlpha;
+    ctx.fillStyle = 'rgba(5,8,16,0.7)';
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+
+    switch (card.type) {
+      case 'start':
+        this.drawAttractPrompt(ctx, width, height);
+        break;
+      case 'objective':
+        this.drawAttractObjectiveCard(ctx, width, height, card, alpha);
+        break;
+      case 'controls':
+        this.drawAttractControlsCard(ctx, width, height, card, alpha);
+        break;
+      case 'mechanic':
+        this.drawAttractMechanicCard(ctx, width, height, card, alpha);
+        break;
+      case 'time':
+        this.drawAttractTimeCard(ctx, width, height, card, alpha);
+        break;
+      case 'bonus':
+        this.drawAttractBonusCard(ctx, width, height, card, alpha);
+        break;
+      case 'leaderboard':
+        this.drawAttractLeaderboardCard(ctx, width, height, card, alpha);
+        break;
+      default:
+        this.drawAttractPrompt(ctx, width, height);
+        break;
+    }
+
+    if (card.type !== 'start') {
+      this.drawAttractStartCta(ctx, width, height, Math.max(alpha, 0.35));
+    }
+  }
+
+  private drawAttractCardHeader(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    headline: string,
+    subline: string | undefined,
+    alpha: number
+  ) {
+    const centerX = width / 2;
+    const y = Math.round(height * 0.16);
+    const headlineSize = Math.max(26, Math.round(height * 0.05));
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `${headlineSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#f8fafc';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+    ctx.shadowBlur = headlineSize * 0.4;
+    ctx.fillText(headline, centerX, y);
+    if (subline) {
+      ctx.font = `${Math.max(15, Math.round(headlineSize * 0.55))}px Orbitron, sans-serif`;
+      ctx.fillStyle = 'rgba(203, 213, 245, 0.9)';
+      ctx.shadowBlur = headlineSize * 0.2;
+      ctx.fillText(subline, centerX, y + headlineSize * 0.9);
+    }
+    ctx.restore();
+  }
+
+  private drawAttractObjectiveCard(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    card: AttractCard,
+    alpha: number
+  ) {
+    this.drawAttractCardHeader(ctx, width, height, card.headline, card.subline, alpha);
+    const baseScale = Math.max(1.1, Math.min(1.6, width * 0.0014));
+    const centerPos = { x: width * 0.45, y: height * 0.55 };
+    const ringPos = { x: width * 0.68, y: centerPos.y };
+    const themeSet = this.getThemeSymbolSet();
+    const centerType = themeSet[0] ?? 'triangle';
+    const ringType = themeSet[1] ?? themeSet[0] ?? 'square';
+    const palette = getSymbolPalette({ type: centerType, x: 0, y: 0, scale: 1, rotation: 0 });
+    const pulse = (Math.sin(this.attractCardTimer * 3) + 1) / 2;
+    const highlightScale = 1 + pulse * 0.08;
+    const centerSymbol: Symbol = {
+      type: centerType,
+      x: centerPos.x,
+      y: centerPos.y,
+      scale: baseScale * highlightScale,
+      rotation: 0,
+      color: palette.base
+    };
+    const ringSymbol: Symbol = {
+      type: ringType,
+      x: ringPos.x,
+      y: ringPos.y,
+      scale: baseScale * 0.95,
+      rotation: 0,
+      color: palette.glow
+    };
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    drawSymbol(ctx, centerSymbol, true, this.symbolStrokeScale);
+    drawSymbol(ctx, ringSymbol, false, this.symbolStrokeScale);
+    ctx.strokeStyle = colorWithAlpha(rgbToHex(palette.glow), 0.8, 0.25);
+    ctx.lineWidth = Math.max(2, width * 0.004);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(centerPos.x + baseScale * 32, centerPos.y);
+    ctx.lineTo(ringPos.x - baseScale * 30, ringPos.y);
+    ctx.stroke();
+    ctx.restore();
+
+    this.drawArrow(ctx, centerPos.x + baseScale * 28, centerPos.y, ringPos.x - baseScale * 30, ringPos.y, palette.glow, alpha);
+  }
+
+  private drawArrow(
+    ctx: CanvasRenderingContext2D,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    color: RGBColor | string,
+    alpha: number
+  ) {
+    ctx.save();
+    const hex = typeof color === 'string' ? color : rgbToHex(color);
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = colorWithAlpha(hex, 0.85, 0.2);
+    ctx.lineWidth = Math.max(4, Math.hypot(x2 - x1, y2 - y1) * 0.01);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    const angle = Math.atan2(y2 - y1, x2 - x1);
+    const size = Math.max(12, ctx.lineWidth * 2.4);
+    ctx.beginPath();
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(x2 - size * Math.cos(angle - Math.PI / 6), y2 - size * Math.sin(angle - Math.PI / 6));
+    ctx.lineTo(x2 - size * Math.cos(angle + Math.PI / 6), y2 - size * Math.sin(angle + Math.PI / 6));
+    ctx.closePath();
+    ctx.fillStyle = colorWithAlpha(hex, 0.9, 0.25);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private drawAttractControlsCard(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    card: AttractCard,
+    alpha: number
+  ) {
+    this.drawAttractCardHeader(ctx, width, height, card.headline, card.subline, alpha);
+    const centerX = width / 2;
+    const centerY = height * 0.55;
+    const size = Math.max(28, Math.round(width * 0.035));
+    const labels = ['↑', '←', '→', '↓'];
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = `${size}px Orbitron, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#e2e8f0';
+    ctx.shadowColor = 'rgba(10, 20, 30, 0.6)';
+    ctx.shadowBlur = size * 0.4;
+    ctx.fillText(labels[0], centerX, centerY - size * 1.2);
+    ctx.fillText(labels[1], centerX - size * 1.4, centerY);
+    ctx.fillText(labels[2], centerX + size * 1.4, centerY);
+    ctx.fillText(labels[3], centerX, centerY + size * 1.2);
+    ctx.font = `${Math.max(18, Math.round(size * 0.6))}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#7ee787';
+    ctx.fillText('Enter', centerX, centerY + size * 2.3);
+    ctx.restore();
+  }
+
+  private drawAttractMechanicCard(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    card: AttractCard,
+    alpha: number
+  ) {
+    this.drawAttractCardHeader(ctx, width, height, card.headline, card.subline, alpha);
+    const areaY = height * 0.52;
+    const areaH = Math.max(120, height * 0.22);
+    const centerX = width / 2;
+    const symbolScale = Math.max(0.9, Math.min(1.4, width * 0.0012));
+    const themeSet = this.getThemeSymbolSet();
+    const baseTypeA = themeSet[0] ?? 'triangle';
+    const baseTypeB = themeSet[1] ?? themeSet[0] ?? 'square';
+    const baseColor = this.getRandomSymbolColor();
+    const secondaryColor = this.getRandomSymbolColor();
+    const pulse = (Math.sin(this.attractCardTimer * 4) + 1) / 2;
+    const glowAlpha = alpha * (0.35 + pulse * 0.25);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (card.mechanic === 'remap') {
+      const left: Symbol = { type: baseTypeA, x: centerX - 120, y: areaY, scale: symbolScale, rotation: 0, color: baseColor };
+      const right: Symbol = { type: baseTypeB, x: centerX + 120, y: areaY, scale: symbolScale, rotation: 0, color: secondaryColor };
+      drawSymbol(ctx, left, true, this.symbolStrokeScale);
+      drawSymbol(ctx, right, true, this.symbolStrokeScale);
+      this.drawArrow(ctx, left.x + 36, left.y, right.x - 36, right.y, baseColor, alpha);
+      ctx.font = `${Math.max(16, Math.round(width * 0.018))}px Orbitron, sans-serif`;
+      ctx.fillStyle = '#cbd5f5';
+      ctx.textAlign = 'center';
+      ctx.fillText('Left = Right, Right = Left', centerX, areaY + areaH * 0.35);
+    } else if (card.mechanic === 'memory') {
+      const layoutRadius = Math.min(width, height) * 0.12;
+      const center = { x: centerX, y: areaY };
+      const positions = RING_BASE_ANGLES.map((angle) => ({
+        x: center.x + layoutRadius * Math.cos(angle),
+        y: center.y + layoutRadius * Math.sin(angle)
+      }));
+      positions.forEach((pos, idx) => {
+        const symbol: Symbol = {
+          type: themeSet[idx % themeSet.length] ?? baseTypeA,
+          x: pos.x,
+          y: pos.y,
+          scale: symbolScale * 0.8,
+          rotation: 0,
+          color: idx === 0 ? baseColor : secondaryColor
+        };
+        const hidden = this.attractCardTimer > card.duration * 0.5;
+        ctx.save();
+        if (hidden) {
+          ctx.globalAlpha = 0.3;
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.6)';
+          ctx.beginPath();
+          ctx.arc(symbol.x, symbol.y, symbol.scale * 44, 0, TAU);
+          ctx.fill();
+        }
+        ctx.globalAlpha = hidden ? alpha * 0.3 : alpha;
+        drawSymbol(ctx, symbol, false, this.symbolStrokeScale);
+        ctx.restore();
+      });
+      ctx.font = `${Math.max(15, Math.round(width * 0.017))}px Orbitron, sans-serif`;
+      ctx.fillStyle = '#cbd5f5';
+      ctx.textAlign = 'center';
+      ctx.fillText('Ring hides after preview', centerX, areaY + areaH * 0.38);
+    } else if (card.mechanic === 'joystick') {
+      const arrowSize = Math.max(26, Math.round(width * 0.028));
+      ctx.font = `${arrowSize}px Orbitron, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#e2e8f0';
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur = arrowSize * 0.3;
+      ctx.fillText('← becomes →', centerX, areaY);
+      ctx.fillText('→ becomes ←', centerX, areaY + arrowSize * 1.4);
+    } else {
+      const centerType = baseTypeA;
+      const ringType = baseTypeA;
+      const centerSymbol: Symbol = {
+        type: centerType,
+        x: centerX - 80,
+        y: areaY,
+        scale: symbolScale * 1.2,
+        rotation: 0,
+        color: baseColor
+      };
+      const ringSymbol: Symbol = {
+        type: ringType,
+        x: centerX + 80,
+        y: areaY,
+        scale: symbolScale * 1.1,
+        rotation: 0,
+        color: baseColor
+      };
+      drawSymbol(ctx, centerSymbol, true, this.symbolStrokeScale);
+      ctx.save();
+      ctx.globalAlpha = 0.6;
+      drawSymbol(ctx, ringSymbol, false, this.symbolStrokeScale);
+      ctx.restore();
+      ctx.font = `${Math.max(16, Math.round(width * 0.019))}px Orbitron, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#cbd5f5';
+      ctx.fillText('Match glow or shape', centerX, areaY + areaH * 0.32);
+      ctx.strokeStyle = colorWithAlpha(rgbToHex(baseColor), 0.8, 0.2);
+      ctx.lineWidth = Math.max(2, width * 0.0035);
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur = width * 0.004;
+      ctx.beginPath();
+      ctx.arc(centerX + 80, areaY, ringSymbol.scale * 42, 0, TAU);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalAlpha = glowAlpha;
+    ctx.strokeStyle = 'rgba(126, 231, 135, 0.4)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(centerX, areaY, Math.max(80, width * 0.09), 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawAttractTimeCard(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    card: AttractCard,
+    alpha: number
+  ) {
+    this.drawAttractCardHeader(ctx, width, height, card.headline, card.subline, alpha);
+    const barWidth = Math.max(260, width * 0.4);
+    const barHeight = Math.max(14, height * 0.018);
+    const x = (width - barWidth) / 2;
+    const y = height * 0.55;
+    const wave = (Math.sin(this.attractCardTimer * 2.5) + 1) / 2;
+    const fillRatio = clamp(0.25 + wave * 0.6, 0, 1);
+    const warning = fillRatio < 0.2;
+    const fillColor = warning ? '#ff4d6f' : '#5fe8ff';
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.65)';
+    ctx.strokeStyle = 'rgba(91, 141, 255, 0.45)';
+    ctx.lineWidth = Math.max(2, barHeight * 0.3);
+    this.drawRoundedRect(ctx, x, y, barWidth, barHeight, barHeight / 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = fillColor;
+    this.drawRoundedRect(ctx, x, y, barWidth * fillRatio, barHeight, barHeight / 2);
+    ctx.fill();
+    ctx.font = `${Math.max(16, Math.round(width * 0.02))}px Orbitron, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#cbd5f5';
+    ctx.fillText(fillRatio > 0.5 ? 'Bonus Time' : 'Hurry Up', width / 2, y - barHeight * 1.2);
+    ctx.restore();
+  }
+
+  private drawRoundedRect(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    rads: number
+  ) {
+    const rad = Math.min(rads, Math.min(w, h) / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rad, y);
+    ctx.lineTo(x + w - rad, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + rad);
+    ctx.lineTo(x + w, y + h - rad);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
+    ctx.lineTo(x + rad, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - rad);
+    ctx.lineTo(x, y + rad);
+    ctx.quadraticCurveTo(x, y, x + rad, y);
+    ctx.closePath();
+  }
+
+  private drawAttractBonusCard(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    card: AttractCard,
+    alpha: number
+  ) {
+    this.drawAttractCardHeader(ctx, width, height, card.headline, card.subline, alpha);
+    const center = { x: width / 2, y: height * 0.55 };
+    const radius = Math.min(width, height) * 0.16;
+    const segments = 6;
+    const fillSegments = Math.max(0, Math.floor(((Math.sin(this.attractCardTimer * 2) + 1) / 2) * segments));
+    ctx.save();
+    ctx.translate(center.x, center.y);
+    ctx.globalAlpha = alpha;
+    for (let i = 0; i < segments; i += 1) {
+      const startAngle = (-Math.PI / 2) + (i / segments) * TAU;
+      const endAngle = startAngle + TAU / segments * 0.9;
+      ctx.beginPath();
+      ctx.strokeStyle = i < fillSegments ? '#ffd166' : 'rgba(125, 211, 252, 0.4)';
+      ctx.lineWidth = Math.max(8, radius * 0.08);
+      ctx.arc(0, 0, radius, startAngle, endAngle);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(126, 231, 135, 0.5)';
+    ctx.lineWidth = Math.max(4, radius * 0.04);
+    ctx.arc(0, 0, radius * 0.65, 0, TAU);
+    ctx.stroke();
+    ctx.font = `${Math.max(18, Math.round(width * 0.022))}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#f8fafc';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Bonus x2', 0, 0);
+    ctx.restore();
+  }
+
+  private drawAttractLeaderboardCard(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    card: AttractCard,
+    alpha: number
+  ) {
+    this.drawAttractCardHeader(ctx, width, height, card.headline, card.subline, alpha);
+    const entries = this.leaderboard.slice(0, 4);
+    const fallbackScore = Math.max(4500, this.highscore, entries[0]?.score ?? 0);
+    const display = entries.length > 0 ? entries : [{ name: 'PLAYER', score: fallbackScore }];
+    const startY = height * 0.5;
+    const rowH = Math.max(24, Math.round(height * 0.05));
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = `${Math.max(18, Math.round(width * 0.02))}px Orbitron, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#e2e8f0';
+    display.forEach((entry, idx) => {
+      const y = startY + idx * rowH;
+      ctx.fillText(`${idx + 1}. ${entry.name}  –  ${entry.score}`, width / 2, y);
+    });
+    const target = Math.max(4500, fallbackScore);
+    ctx.font = `${Math.max(15, Math.round(width * 0.018))}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#7ee787';
+    ctx.fillText(`Beat ${target} to place`, width / 2, startY + display.length * rowH + rowH * 0.7);
+    ctx.restore();
+  }
+
+  private drawAttractStartCta(ctx: CanvasRenderingContext2D, width: number, height: number, alpha: number) {
+    const labelText = 'Press Enter to start';
+    const labelSize = Math.max(16, Math.round(height * 0.03));
+    const pulse = (Math.sin(this.attractPulseTime * 2.2) + 1) / 2;
+    const labelAlpha = (0.5 + pulse * 0.5) * alpha;
+    const y = Math.round(height * 0.84);
+    ctx.save();
+    ctx.globalAlpha = labelAlpha;
+    ctx.font = `${labelSize}px Orbitron, sans-serif`;
+    ctx.fillStyle = '#7ee787';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+    ctx.shadowBlur = labelSize * 0.9;
+    ctx.fillText(labelText, width / 2, y);
+    const metrics = ctx.measureText(labelText);
+    const paddingX = Math.max(24, labelSize);
+    const paddingY = Math.max(12, labelSize * 0.6);
+    const rectX = width / 2 - metrics.width / 2 - paddingX / 2;
+    const rectY = y - paddingY / 2;
+    const rectWidth = metrics.width + paddingX;
+    const rectHeight = labelSize + paddingY;
+    this.attractStartRect = {
+      x: rectX,
+      y: rectY,
+      width: rectWidth,
+      height: rectHeight
+    };
+    ctx.strokeStyle = `rgba(126, 231, 135, ${0.25 + pulse * 0.5})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(rectX, rectY + rectHeight);
+    ctx.lineTo(rectX + rectWidth, rectY + rectHeight);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -3303,7 +3809,7 @@ export class Game implements InputHandler {
     const height = r.h || this.renderer.canvas.height;
     this.drawAttractBackground(ctx, width, height);
     this.drawAmbientSymbols(ctx);
-    this.drawAttractPrompt(ctx, width, height);
+    this.drawAttractTutorialCard(ctx, width, height);
   }
 
   private draw() {
