@@ -7,6 +7,7 @@ export type Config = {
   volume?: number;
   initialTime?: number;
   maxTimeBonus?: number;
+  timeBonusMode?: 'classic' | 'endurance' | 'hybrid';
   bonusWindow?: number;
   ringRadiusFactor?: number;
   menuSymbolCount?: number;

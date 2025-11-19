@@ -29,6 +29,7 @@ const BASE_RING_SYMBOL_SCALE = 1.22;
 const BASE_CENTER_SCALE = 1.85;
 const CENTER_MIN_RATIO = 0.4;
 const TIME_DELTA_DISPLAY_SEC = 1.1;
+const TIMEBAR_TARGET_RATIO = 0.25;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const randBetween = (min: number, max: number) => Math.random() * (max - min) + min;
@@ -122,6 +123,8 @@ type ScoreTracer = {
   baseAlpha: number;
   glow: number;
 };
+
+type TimeBonusMode = 'classic' | 'endurance' | 'hybrid';
 
 interface HudMetrics {
   hudPad: number;
@@ -276,6 +279,7 @@ interface GameConfig {
   maxTimeBonus: number;    // Maximum extra time rewarded
   minTimeBonus: number;    // Minimum extra time rewarded
   bonusWindow: number;     // Seconds window for full bonus
+  timeBonusMode: TimeBonusMode;
   ringRadiusFactor: number;// Relative radius of outer ring
   symbolScale: number;
   symbolStroke: number;
@@ -304,6 +308,7 @@ export class Game implements InputHandler {
     maxTimeBonus: 3,
     minTimeBonus: 0.5,
     bonusWindow: 2.5,
+    timeBonusMode: 'classic',
     ringRadiusFactor: 0.15,
     symbolScale: 1,
     symbolStroke: 1,
@@ -318,6 +323,7 @@ export class Game implements InputHandler {
     maxTimeBonus: 3,
     minTimeBonus: 0.5,
     bonusWindow: 2.5,
+    timeBonusMode: 'classic',
     ringRadiusFactor: 0.15,
     symbolScale: 1,
     symbolStroke: 1,
@@ -1552,6 +1558,9 @@ export class Game implements InputHandler {
       scoreRayEnabled?: boolean;
     };
     const themeSetting: SymbolTheme = data.symbolTheme === 'pacman' ? 'pacman' : 'classic';
+    const requestedTimeMode = data.timeBonusMode;
+    const timeBonusMode: TimeBonusMode =
+      requestedTimeMode === 'endurance' || requestedTimeMode === 'hybrid' ? requestedTimeMode : 'classic';
     const merged: GameConfig = {
       ...this.defaults,
       duration: clamp(data.initialTime ?? this.defaults.duration, 15, 300),
@@ -1560,6 +1569,7 @@ export class Game implements InputHandler {
       maxTimeBonus: clamp(data.maxTimeBonus ?? this.defaults.maxTimeBonus, 0.5, 6),
       minTimeBonus: clamp(data.minTimeBonus ?? this.defaults.minTimeBonus, 0.1, 5),
       bonusWindow: clamp(data.bonusWindow ?? this.defaults.bonusWindow, 0.5, 6),
+      timeBonusMode,
       ringRadiusFactor: clamp(data.ringRadiusFactor ?? this.defaults.ringRadiusFactor, 0.08, 0.3),
       symbolScale: clamp(data.symbolScale ?? this.defaults.symbolScale, 0.6, 1.6),
       symbolStroke: clamp(data.symbolStroke ?? this.defaults.symbolStroke, 0.5, 1.8),
@@ -1856,8 +1866,29 @@ export class Game implements InputHandler {
     const floor = clamp(this.config.minTimeBonus, 0, maxBonus);
     const window = Math.max(0.0001, this.config.bonusWindow);
     const reaction = Math.max(0, this.time.get() - this.promptSpawnTime);
-    const ratio = clamp(1 - reaction / window, 0, 1);
-    return clamp(floor + (maxBonus - floor) * ratio, floor, maxBonus);
+    const reactionRatio = clamp(1 - reaction / window, 0, 1);
+    const duration = Math.max(0.0001, this.config.duration);
+    const timeRatio = clamp(this.timer.get() / duration, 0, 1);
+    const deficitRatio = clamp(
+      (TIMEBAR_TARGET_RATIO - timeRatio) / TIMEBAR_TARGET_RATIO,
+      0,
+      1
+    );
+
+    let mix = reactionRatio;
+    switch (this.config.timeBonusMode) {
+      case 'endurance':
+        mix = deficitRatio;
+        break;
+      case 'hybrid':
+        mix = clamp((reactionRatio + deficitRatio) / 2, 0, 1);
+        break;
+      case 'classic':
+      default:
+        mix = reactionRatio;
+        break;
+    }
+    return clamp(floor + (maxBonus - floor) * mix, floor, maxBonus);
   }
 
   private animateCenterSwap(next: SymbolType, options?: {

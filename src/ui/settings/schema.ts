@@ -105,6 +105,22 @@ export const SETTINGS_TABS: SettingsTab[] = [
       },
       {
         type: 'cycle',
+        key: 'timeBonusMode',
+        label: 'Time Bonus Mode',
+        options: ['classic', 'endurance', 'hybrid'],
+        format: (value) => {
+          switch (value) {
+            case 'endurance':
+              return 'Assist (Low Time)';
+            case 'hybrid':
+              return 'Hybrid';
+            default:
+              return 'Classic (Speed)';
+          }
+        }
+      },
+      {
+        type: 'cycle',
         key: 'difficulty',
         label: 'Difficulty',
         options: ['easy', 'medium', 'hard', 'progressive'],

@@ -82,6 +82,7 @@ export class App {
       ...persistedConfig,
       initialTime: persistedConfig.initialTime ?? 60,
       maxTimeBonus: persistedConfig.maxTimeBonus ?? 3,
+      timeBonusMode: persistedConfig.timeBonusMode ?? 'classic',
       bonusWindow: persistedConfig.bonusWindow ?? 2.5,
       ringRadiusFactor: persistedConfig.ringRadiusFactor ?? 0.15,
       menuSymbolCount: persistedConfig.menuSymbolCount ?? 24,
