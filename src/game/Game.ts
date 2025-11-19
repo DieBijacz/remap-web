@@ -84,10 +84,10 @@ const MEMORY_PREVIEW_DURATION = 1.0;
 const RING_BASE_ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
 const MECHANIC_COLORS: Record<MechanicType, string> = {
   none: '#9da7b3',
-  remap: '#ec4899',
+  remap: '#f97316',       // vivid amber to separate from match-color
   memory: '#f87171',
   joystick: '#34d399',
-  'match-color': '#f472b6',
+  'match-color': '#7c3aed', // purple to distinguish from remap/memory
   'match-shape': '#22d3ee'
 };
 const isToggleMechanic = (type: MechanicType): type is Exclude<MechanicType, 'none'> => type !== 'none';
