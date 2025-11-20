@@ -147,6 +147,30 @@ export const SETTINGS_TABS: SettingsTab[] = [
     ]
   },
   {
+    key: 'attract',
+    label: 'Attract Mode',
+    items: [
+      {
+        type: 'number',
+        key: 'attractCardDurationScale',
+        label: 'Card Duration Scale',
+        min: 0.5,
+        max: 3,
+        step: 0.1,
+        format: (v) => `${v.toFixed(1)}x`
+      },
+      {
+        type: 'number',
+        key: 'attractCardInterval',
+        label: 'Pause Between Cards',
+        min: 0,
+        max: 5,
+        step: 0.1,
+        format: (v) => `${v.toFixed(1)} s`
+      }
+    ]
+  },
+  {
     key: 'mechanics',
     label: 'Mechanics',
     items: [

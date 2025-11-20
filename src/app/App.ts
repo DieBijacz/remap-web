@@ -116,6 +116,8 @@ export class App {
     const persistedSymbolTheme = persistedConfig.symbolTheme === 'pacman' ? 'pacman' : 'classic';
     const nameEntryModeDefault = persistedConfig.nameEntryMode === 'keyboard' ? 'keyboard' : 'slots';
     const symbolColorSetting = sanitizeSymbolColors(persistedConfig.symbolColors);
+    const attractDurationScale = clampNumber(persistedConfig.attractCardDurationScale ?? 1.5, 0.5, 3, 2);
+    const attractCardInterval = clampNumber(persistedConfig.attractCardInterval ?? 0.4, 0, 5, 2);
 
     const settingsValues: PersistentConfig = {
       ...persistedConfig,
@@ -141,6 +143,8 @@ export class App {
       symbolTheme: persistedSymbolTheme,
       symbolColors: symbolColorSetting,
       uiFontScale: persistedConfig.uiFontScale ?? 0.9,
+      attractCardDurationScale: attractDurationScale,
+      attractCardInterval,
       particlesPerScore: persistedParticlesPerScore,
       particlesPersist: persistedConfig.particlesPersist ?? false,
       scoreRayCount: persistedScoreRayCount,

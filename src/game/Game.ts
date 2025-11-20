@@ -374,6 +374,8 @@ export class Game implements InputHandler {
   private attractCards: AttractCard[] = buildAttractCards();
   private attractCardIndex = 0;
   private attractCardTimer = 0;
+  private attractCardDurationScale = 1.5;
+  private attractCardInterval = 0.4;
   private menuColorPool: RGBColor[] = DEFAULT_SYMBOL_COLORS.map(cloneColor);
   private playfieldCenter = { x: 0, y: 0 };
   private lastRingCenter = { x: 0, y: 0 };
@@ -1835,6 +1837,11 @@ export class Game implements InputHandler {
       this.scoreTracers = [];
     }
 
+    const attractDurationScale = typeof data.attractCardDurationScale === 'number' ? data.attractCardDurationScale : this.attractCardDurationScale;
+    this.attractCardDurationScale = clamp(attractDurationScale, 0.5, 3);
+    const attractInterval = typeof data.attractCardInterval === 'number' ? data.attractCardInterval : this.attractCardInterval;
+    this.attractCardInterval = clamp(attractInterval, 0, 5);
+
     const nameEntryModeSetting =
       data.nameEntryMode === 'keyboard' ? 'keyboard' : 'slots';
     this.nameEntryMode = nameEntryModeSetting;
@@ -2942,12 +2949,18 @@ export class Game implements InputHandler {
     }
     const card = this.getCurrentAttractCard();
     if (!card) return;
-    const duration = Math.max(0.5, card.duration);
+    const duration = Math.max(0.5, this.getAttractCardDuration(card));
     this.attractCardTimer += dt;
     if (this.attractCardTimer >= duration) {
       this.attractCardTimer = 0;
       this.attractCardIndex = (this.attractCardIndex + 1) % this.attractCards.length;
     }
+  }
+
+  private getAttractCardDuration(card: AttractCard): number {
+    const base = Math.max(0.5, card.duration);
+    const scaled = base * this.attractCardDurationScale + this.attractCardInterval;
+    return clamp(scaled, 0.5, 15);
   }
 
   private getCurrentAttractCard(): AttractCard | null {
@@ -2960,7 +2973,7 @@ export class Game implements InputHandler {
 
   private getAttractCardAlpha(card: AttractCard | null): number {
     if (!card) return this.attractPromptAlpha;
-    const duration = Math.max(0.5, card.duration);
+    const duration = Math.max(0.5, this.getAttractCardDuration(card));
     const fadeWindow = Math.min(0.6, duration * 0.3);
     const t = this.attractCardTimer;
     const fadeIn = clamp(t / Math.max(0.0001, fadeWindow), 0, 1);
@@ -3225,7 +3238,7 @@ export class Game implements InputHandler {
       ctx.shadowColor = 'rgba(0,0,0,0.5)';
       ctx.shadowBlur = arrowSize * 0.3;
       ctx.fillText('← becomes →', centerX, areaY);
-      ctx.fillText('→ becomes ←', centerX, areaY + arrowSize * 1.4);
+      ctx.fillText('↑ becomes ↓', centerX, areaY + arrowSize * 1.4);
     } else {
       const centerType = baseTypeA;
       const ringType = baseTypeA;

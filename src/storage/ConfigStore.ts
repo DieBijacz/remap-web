@@ -25,6 +25,8 @@ export type Config = {
   uiFontScale?: number;
   memoryPreviewDuration?: number;
   memoryPreviewByDifficulty?: Partial<Record<'easy' | 'medium' | 'hard' | 'progressive', number>>;
+  attractCardDurationScale?: number;
+  attractCardInterval?: number;
   particlesPerScore?: number;
   particlesPersist?: boolean;
   scoreRayThickness?: number;
